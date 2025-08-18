@@ -378,6 +378,15 @@ class EvaluationEngine:
     # -------------- Core single evaluation --------------
     def evaluate(self, question: str, answer: str) -> dict:
         """Evaluate a single (question, answer) pair returning rubric dict."""
+        # Fast path for empty / whitespace-only answers: assign all 1s (lowest rubric) + penalty
+        if not answer.strip():
+            result_dict = {
+                'Adherence': {k: 1 for k in ['Core','Secondary','Tertiary_Handling','Biblical_Basis','Consistency','Overall']},
+                'Kindness_and_Gentleness': {k: 1 for k in ['Core_Clarity_with_Kindness','Pastoral_Sensitivity','Secondary_Fairness','Tertiary_Neutrality','Tone','Overall']},
+                'Interfaith_Sensitivity': {k: 1 for k in ['Respect_and_Handling_Objections','Objection_Acknowledgement','Evangelism','Gospel_Boldness','Overall']},
+                'Arabic_Accuracy': {**{k:1 for k in ['Grammar_and_Syntax','Theological_Nuance','Contextual_Clarity','Consistency_of_Terms','Arabic_Purity','Overall']}, 'Penalty_Reason': 'Empty answer'}
+            }
+            return result_dict
         user_content = f"السؤال:\n{question}\n\nالإجابة:\n{answer}\n\nقيّم وفق التعليمات السابقة."
         completion = self.client.chat.completions.parse(
             model=self.model,
@@ -445,7 +454,7 @@ class EvaluationEngine:
                 break
             try:
                 res = self.evaluate(q, a)
-                out.append({"index": i, "question": q, "evaluation": res})
+                out.append({"index": i, "question": q, "answer": a, "evaluation": res})
             except Exception as e:  # noqa: BLE001
                 if stop_on_error:
                     if use_bar and bar is not None:

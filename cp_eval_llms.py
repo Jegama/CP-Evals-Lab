@@ -265,8 +265,10 @@ def main(argv: List[str]) -> int:
     print(f"[init] Judge model: {args.judge_model}")
     print(f"[init] Language: {args.language} | Mode: {args.mode}")
 
+    generation_mode = args.mode.startswith("generate")
+
     # MODE: generation (ft_evals)
-    if args.mode.startswith("generate"):
+    if generation_mode:
         if not args.gen_model:
             raise SystemExit("--gen-model required for generation modes")
         if not answers_label:
@@ -277,16 +279,20 @@ def main(argv: List[str]) -> int:
         output_dataset_path = Path(output_dataset_name)
         if not output_dataset_path.is_absolute():
             output_dataset_path = ft_evals_dir / output_dataset_path.name
-        dataset_path = Path(
-            generate_dataset(
-                args.mode,
-                questions_file,
-                args.gen_model,
-                engine,
-                str(output_dataset_path),
+        if output_dataset_path.exists():
+            dataset_path = output_dataset_path
+            print(f"[generate] Re-using existing generated dataset (no regeneration): {dataset_path}")
+        else:
+            dataset_path = Path(
+                generate_dataset(
+                    args.mode,
+                    questions_file,
+                    args.gen_model,
+                    engine,
+                    str(output_dataset_path),
+                )
             )
-        )
-        print(f"[generate] Dataset ready at {dataset_path}")
+            print(f"[generate] Dataset ready at {dataset_path}")
     else:  # MODE: dataset
         if not args.dataset:
             raise SystemExit("--dataset required for dataset mode")
@@ -325,6 +331,27 @@ def main(argv: List[str]) -> int:
         sample_questions = random.sample(list(q_to_a.keys()), sample_target)
         pairs = [(q, q_to_a[q]) for q in sample_questions]
         print(f"[extended] Selected random sample of {len(pairs)} questions (total available: {total_q}; target rule: max(500,10%={math.ceil(0.10*total_q)}))")
+    elif generation_mode:
+        # Generation evaluation: use question list; penalize missing answers by inserting empty answer strings
+        eval_questions = load_eval_questions(questions_file, limit=100)
+        if not eval_questions:
+            raise SystemExit("Questions file empty or unreadable for generation evaluation.")
+        raw_pairs = load_dataset_pairs(str(dataset_path))
+        q_to_a: Dict[str, str] = {}
+        for q, a in raw_pairs:
+            if q not in q_to_a:
+                q_to_a[q] = a
+        missing = 0
+        pairs: List[Tuple[str, str]] = []
+        for q in eval_questions:
+            if q in q_to_a:
+                pairs.append((q, q_to_a[q]))
+            else:
+                missing += 1
+                pairs.append((q, ""))  # Placeholder blank answer -> evaluation engine will penalize
+        if missing:
+            print(f"[generate-eval] WARNING: {missing} missing answers inserted as empty strings (will be penalized).")
+        print(f"[generate-eval] Prepared {len(pairs)} question/answer pairs for evaluation.")
     else:
         # Standard dataset mode: strict 100-question curated list
         eval_questions = load_eval_questions(questions_file, limit=100)
