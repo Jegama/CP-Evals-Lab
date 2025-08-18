@@ -184,18 +184,18 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     Key organizational conventions (auto inference when omitted):
         data/<language>/
             ├─ training_datasets/
-            │    └─ evals/ (dataset & enhanced modes comparison + results JSONL)
+            │    └─ evals/ (dataset & extended modes comparison + results JSONL)
             └─ ft_evals/  (generation modes: generated datasets, comparison + results JSONL)
     """
     p = argparse.ArgumentParser(description="Generate and/or evaluate QA datasets.")
     p.add_argument("--language", choices=["arabic", "english"], default="arabic",
                    help="Language namespace: chooses data/<language>/ tree (default: arabic)")
-    p.add_argument("--mode", choices=["dataset", "enhanced", "generate-openai", "generate-together"], default="dataset",
-                   help="dataset: evaluate existing training dataset using fixed 100-question file; enhanced: random sample of max(500,10%) questions from dataset; generate-* : generate answers then evaluate (stored under ft_evals)")
-    # dataset only required for dataset/enhanced modes; we validate later
-    p.add_argument("--dataset", help="(dataset/enhanced modes) Existing dataset JSONL to evaluate (training_datasets). Not used for generate-* modes.")
-    # questions file (not required for enhanced mode)
-    p.add_argument("--questions-file", help="Evaluation questions file (default auto for dataset mode: data/<language>/<prefix>eval_questions.txt). Not required for enhanced mode unless supplied.")
+    p.add_argument("--mode", choices=["dataset", "extended", "generate-openai", "generate-together"], default="dataset",
+                   help="dataset: evaluate existing training dataset using fixed 100-question file; extended: random sample of max(500,10%) questions from dataset; generate-* : generate answers then evaluate (stored under ft_evals)")
+    # dataset only required for dataset/extended modes; we validate later
+    p.add_argument("--dataset", help="(dataset/extended modes) Existing dataset JSONL to evaluate (training_datasets). Not used for generate-* modes.")
+    # questions file (not required for extended mode)
+    p.add_argument("--questions-file", help="Evaluation questions file (default auto for dataset mode: data/<language>/<prefix>eval_questions.txt). Not required for extended mode unless supplied.")
     p.add_argument("--gen-model", help="(generation modes only) Provider model used to generate answers (required for generate-* modes)")
     p.add_argument("--answers-label", help="Human-friendly label for the answers column (defaults: gen-model or inferred from dataset)")
     p.add_argument("--judge-model", default="gpt-5-mini", help="Model used as evaluator (default: gpt-5-mini)")
@@ -237,17 +237,17 @@ def main(argv: List[str]) -> int:
     for d in (training_evals_dir, ft_evals_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    # Infer questions file if not provided (not required for enhanced mode)
+    # Infer questions file if not provided (not required for extended mode)
     prefix = "ar_" if args.language == "arabic" else "en_"
     questions_file = args.questions_file or str(base_lang_dir / f"{prefix}eval_questions.txt")
-    if args.mode != "enhanced" and not Path(questions_file).exists():
+    if args.mode != "extended" and not Path(questions_file).exists():
         raise SystemExit(f"Questions file not found: {questions_file}")
 
     # Determine answers label (may be overridden later if inferred from dataset)
     answers_label = args.answers_label
 
     # Comparison CSV path resolution
-    if args.mode in ("dataset", "enhanced"):
+    if args.mode in ("dataset", "extended"):
         default_comp_csv = training_evals_dir / "dataset_eval_comparison.csv"
     else:
         default_comp_csv = ft_evals_dir / "ft_evals_comparison.csv"
@@ -309,11 +309,11 @@ def main(argv: List[str]) -> int:
     if not answers_label:
         answers_label = 'answers'
 
-    if args.mode == "enhanced":
-        # Enhanced mode: random sample of questions directly from dataset
+    if args.mode == "extended":
+        # Extended mode: random sample of questions directly from dataset
         raw_pairs = load_dataset_pairs(str(dataset_path))
         if not raw_pairs:
-            raise SystemExit("Dataset appears empty or unreadable for enhanced mode.")
+            raise SystemExit("Dataset appears empty or unreadable for extended mode.")
         q_to_a: Dict[str, str] = {}
         for q, a in raw_pairs:
             if q not in q_to_a:
@@ -324,7 +324,7 @@ def main(argv: List[str]) -> int:
             sample_target = total_q
         sample_questions = random.sample(list(q_to_a.keys()), sample_target)
         pairs = [(q, q_to_a[q]) for q in sample_questions]
-        print(f"[enhanced] Selected random sample of {len(pairs)} questions (total available: {total_q}; target rule: max(500,10%={math.ceil(0.10*total_q)}))")
+        print(f"[extended] Selected random sample of {len(pairs)} questions (total available: {total_q}; target rule: max(500,10%={math.ceil(0.10*total_q)}))")
     else:
         # Standard dataset mode: strict 100-question curated list
         eval_questions = load_eval_questions(questions_file, limit=100)
@@ -359,7 +359,7 @@ def main(argv: List[str]) -> int:
     update_comparison_csv(comparison_csv_path, answers_label, aggregated, overwrite=args.overwrite)
 
     # Results JSONL placement (mode dependent)
-    if args.mode in ("dataset", "enhanced"):
+    if args.mode in ("dataset", "extended"):
         default_results_dir = training_evals_dir
     else:
         default_results_dir = ft_evals_dir
@@ -382,7 +382,7 @@ def main(argv: List[str]) -> int:
         'questions_file': questions_file,
         'language': args.language,
         'mode': args.mode,
-        'enhanced_sample_size': len(pairs) if args.mode == 'enhanced' else None,
+        'extended_sample_size': len(pairs) if args.mode == 'extended' else None,
         'comparison_csv': str(comparison_csv_path),
         'timestamp': dt.now().isoformat(),
     }

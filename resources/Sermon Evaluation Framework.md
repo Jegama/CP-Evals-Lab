@@ -226,21 +226,10 @@ Compute rolled‑up composite categories for dashboards by averaging related raw
 * Application_Effectiveness ≈ avg(Application.Clear & Practical, Redemptive Focus, Mandate vs Idea Distinction, Passage Supported, Main Points.Application Quality)
 * Structure_Cohesion ≈ avg(Main Points.Proportional & Coexistent, Conclusion.Summary, Conclusion.Compelling Exhortation, Conclusion.Climax, Conclusion.Pointed End)
 * Illustrations ≈ avg(Main Points.Illustration Quality, Illustrations.Lived-Body Detail, Illustrations.Strengthens Points, Illustrations.Proportion)
-* Overall_Impact – computed narrative / weighted synthesis (NOT a simple average—explain rationale).
-
-### Aggregated Mapping Table (Raw Rubric Paths -> Aggregated Buckets)
-
-| Aggregated Metric | Contributing Rubric Paths |
-| ------------------ | ------------------------- |
-| Textual_Fidelity | Exegetical Support.Alignment with Text; Exegetical Support.Handles Difficulties; Exegetical Support.Proof Accuracy & Clarity; Exegetical Support.Context & Genre Considered |
-| Proposition_Clarity | Proposition.Principle + Application Wed; Proposition.Establishes Main Theme; Proposition.Summarizes Introduction |
-| FCF_Identification | Introduction.FCF Introduced |
-| Application_Effectiveness | Application.Clear & Practical; Application.Redemptive Focus; Application.Mandate vs Idea Distinction; Application.Passage Supported; Main Points.Application Quality |
-| Structure_Cohesion | Main Points.Proportional & Coexistent; Conclusion.Summary; Conclusion.Compelling Exhortation; Conclusion.Climax; Conclusion.Pointed End |
-| Illustrations | Main Points.Illustration Quality; Illustrations.Lived-Body Detail; Illustrations.Strengthens Points; Illustrations.Proportion |
-| Overall_Impact | Weighted synthesis (see algorithm below) |
+* Overall_Impact – Weighted synthesis (see algorithm below).
 
 ### Overall Impact Weighting Algorithm
+
 Base weighted composite (before narrative adjustment):
 * Textual_Fidelity: 0.30
 * Proposition_Clarity: 0.20
@@ -250,7 +239,6 @@ Base weighted composite (before narrative adjustment):
 * FCF_Identification: 0.10
 
 Formula: sum(weight_i * score_i). Result then optionally adjusted by ±0.25 (max) if evaluator narrative identifies a compelling qualitative factor not fully captured (e.g., unusually pastoral tone or severe pastoral misstep). Any adjustment must be accompanied by a one‑sentence rationale appended to Action Steps or a future "Evaluator Notes" field. Cap final value to [1,5] then scale to two decimals.
-
 
 ---
 

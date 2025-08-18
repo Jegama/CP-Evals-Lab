@@ -47,14 +47,33 @@ Legend: 🟩 Top 2 per row, **bold** above row mean.
 
 **Recommendation**: `google-gemma-3-27b-v2`
 
-### Recommendation Rationale
-We only evaluated model answers on the fixed 100-question Arabic eval set (not the full ~3K training examples), so we can't selectively pull high-performing per-item answers from other models for augmentation without risking distribution bias. Given that constraint, `google-gemma-3-27b-v2` is the best single baseline to anchor fine-tuning because:
+### Recommendation (Executive Summary)
+* Strong, balanced top-2 performance across all Arabic Accuracy sub-criteria; no single glaring weakness.
+* High linguistic consistency & purity (4.91 / 4.91) lowers cleanup cost for fine-tuning.
+* Interfaith objection handling slightly behind the per-row leader but gaps are modest and targetable later.
+* Chosen as stable anchor for longitudinal tracking; other models trade small gains for losses in core language fidelity.
 
-* Balanced Strength: It is top-2 in every Arabic Accuracy sub-criterion and leads or is statistically adjacent to the leader in Evangelism and Gospel Boldness without sacrificing linguistic purity.
-* Linguistic Foundation: High scores in Consistency_of_Terms (4.91) and Arabic_Purity (4.91) reduce downstream normalization/remediation work during fine-tuning.
-* Doctrinal & Pastoral Blend: Maintains strong Adherence (4.58) and Kindness_and_Gentleness (4.94) simultaneously—important for preserving core doctrinal faithfulness plus pastoral tone.
-* Interfaith Gap Manageable: Slightly behind the peak model in Respect_and_Handling_Objections (3.55 vs 3.79) and Objection_Acknowledgement (2.28 vs 2.42), but those gaps are modest and can be addressed later via targeted synthetic augmentation or additional curated objection–response exemplars.
-* Stability Over Earlier Versions: Outperforms the earlier gemma variants and avoids the sharper trade-offs seen in gpt-oss-120b-v2 (which gains a bit on objection handling while giving up Arabic purity / consistency edge).
+### Extended 500-Question Robustness Check
+We added a second evaluation on a random 500-question sample. Same rubric & judge; purpose: stability check, not to replace the baseline.
+
+| Criterion | Sub-criterion | llama-4-scout-extended | google-gemma-3-27b-extended | gpt-oss-120b-v2-extended |
+|-----------|---------------|-----------------------:|----------------------------:|--------------------------:|
+| Adherence | N/A | 4.47 | 4.56 | 🟩 **4.77** |
+| Kindness and Gentleness | N/A | 4.75 | 4.93 | 🟩 **4.95** |
+| Interfaith Sensitivity | Respect and Handling Objections | 3.12 | 3.60 | 🟩 **3.75** |
+| Interfaith Sensitivity | Objection Acknowledgement | 1.95 | 2.30 | 🟩 **2.32** |
+| Interfaith Sensitivity | Evangelism | 3.61 | 🟩 **4.46** | 4.15 |
+| Interfaith Sensitivity | Gospel Boldness | 4.38 | 🟩 **4.81** | 4.76 |
+| Arabic Accuracy | Grammar and Syntax | 4.45 | 🟩 **4.75** | 4.39 |
+| Arabic Accuracy | Theological Nuance | 4.08 | 4.30 | 🟩 **4.46** |
+| Arabic Accuracy | Contextual Clarity | 4.59 | 🟩 **4.81** | 4.56 |
+| Arabic Accuracy | Consistency of Terms | 4.70 | 🟩 **4.91** | 4.79 |
+| Arabic Accuracy | Arabic Purity | 4.67 | 🟩 **4.87** | 4.63 |
+|  | Mean | 4.070 | 🟩 **4.391** | 4.321 |
+
+Legend (extended): 🟩 Top 2 per row among extended models; **bold** above the row mean.
+
+Extended Takeaways (Concise): Pattern holds; `gemma-3-27b` stays linguistically strong and broadly balanced; gpt-oss-120b-v2-extended closes objection gaps but still trails in purity/consistency; no evidence to change the primary recommendation.
 
 
 ## Fine-tuned Model Evaluations
