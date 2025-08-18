@@ -133,7 +133,7 @@ class InterfaithSensitivityModel(BaseModel):
     Respect_and_Handling_Objections: int
     Objection_Acknowledgement: int
     Evangelism: int
-    Gospel_Boldness: int  # NEW: decisiveness in articulating exclusivity of Christ & Gospel (no vague relativism)
+    Gospel_Boldness: int 
     Overall: int
 
 class ArabicAccuracyDetailed(BaseModel):
@@ -494,6 +494,7 @@ class EvaluationEngine:
         self,
         questions: List[str],
         model: Optional[str] = None,
+        progress: bool = True,
     ) -> List[Dict[str, Any]]:
         """Generate answers for a list of questions via OpenAI Responses API.
 
@@ -501,6 +502,12 @@ class EvaluationEngine:
         """
         use_model = model or self.model
         out: List[Dict[str, Any]] = []
+        bar = None
+        if progress:
+            try:
+                bar = tqdm(total=len(questions), desc="Generating (OpenAI)", unit="q")
+            except Exception:  # pragma: no cover
+                bar = None
         for i, q in enumerate(questions):
             resp = self.client.responses.create(
                 model=use_model,
@@ -528,6 +535,10 @@ class EvaluationEngine:
                 'model': use_model,
                 'provider': 'openai'
             })
+            if bar is not None:
+                bar.update(1)
+        if bar is not None:
+            bar.close()
         return out
 
     def generate_responses_openai_from_file(
@@ -545,6 +556,7 @@ class EvaluationEngine:
         self,
         questions: List[str],
         model: str = "openai/gpt-oss-120b",
+        progress: bool = True,
     ) -> List[Dict[str, Any]]:
         """Generate answers using Together.ai chat completions API.
 
@@ -558,6 +570,12 @@ class EvaluationEngine:
             ) from e
         client = Together()
         out: List[Dict[str, Any]] = []
+        bar = None
+        if progress:
+            try:
+                bar = tqdm(total=len(questions), desc="Generating (Together)", unit="q")
+            except Exception:  # pragma: no cover
+                bar = None
         for i, q in enumerate(questions):
             messages = []
             messages.append({"role": "user", "content": q})
@@ -594,6 +612,10 @@ class EvaluationEngine:
                 'model': model,
                 'provider': 'together'
             })
+            if bar is not None:
+                bar.update(1)
+        if bar is not None:
+            bar.close()
         return out
 
     def generate_responses_together_from_file(
