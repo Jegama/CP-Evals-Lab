@@ -23,79 +23,14 @@ Building high‑quality, reformed, multilingual Q&A datasets for Calvinist Parro
 
 ---
 
-# Current LLM Evals
+## Evaluations
 
-## Dataset Evaluations
-Current aggregated rubric means from `data/arabic/training_datasets/evals/dataset_eval_comparison.csv`:
-
-| Criterion | Sub-criterion | google-gemma-3-7b | gpt-oss-120b-v1 | gpt-oss-120b-v2 | google-gemma-3-27b | google-gemma-3-27b-v2 | llama-4-scout |
-|-----------|---------------|------------------:|----------------:|----------------:|------------------:|----------------------:|---------------:|
-| Adherence | N/A | 4.58 | 🟩 **4.83** | **4.76** | 🟩 **4.83** | 4.58 | 4.55 |
-| Kindness and Gentleness | N/A | 4.73 | **4.87** | 🟩 **4.92** | **4.86** | 🟩 **4.94** | 4.70 |
-| Interfaith Sensitivity | Respect and Handling Objections | 3.23 | 3.25 | 🟩 **3.79** | **3.38** | 🟩 **3.55** | 3.01 |
-| Interfaith Sensitivity | Objection Acknowledgement | 2.08 | 2.13 | 🟩 **2.42** | 2.17 | 🟩 **2.28** | 1.96 |
-| Interfaith Sensitivity | Evangelism | 3.14 | 3.25 | 🟩 **4.09** | 3.25 | 🟩 **4.40** | **3.92** |
-| Interfaith Sensitivity | Gospel Boldness | 4.10 | 4.19 | 🟩 **4.80** | 4.15 | 🟩 **4.82** | **4.57** |
-| Arabic Accuracy | Grammar and Syntax | 4.31 | 4.48 | 4.55 | 🟩 **4.78** | 🟩 **4.75** | 4.50 |
-| Arabic Accuracy | Theological Nuance | 4.22 | 🟩 **4.58** | **4.50** | 🟩 **4.67** | 4.27 | 4.13 |
-| Arabic Accuracy | Contextual Clarity | 4.69 | 4.67 | 4.58 | 🟩 **4.92** | 🟩 **4.80** | 4.65 |
-| Arabic Accuracy | Consistency of Terms | 4.74 | **4.86** | 4.78 | 🟩 **4.95** | 🟩 **4.91** | 4.84 |
-| Arabic Accuracy | Arabic Purity | 4.23 | 4.50 | **4.72** | 🟩 **4.83** | 🟩 **4.91** | **4.73** |
-|  | Mean | 4.005 | 4.146 | 🟩 **4.355** | **4.254** | 🟩 **4.383** | 4.142 |
-
-Legend: 🟩 Top 2 per row, **bold** above row mean.
-
-**Recommendation**: `google-gemma-3-27b-v2`
-
-### Recommendation (Executive Summary)
-* Strong, balanced top-2 performance across all Arabic Accuracy sub-criteria; no single glaring weakness.
-* High linguistic consistency & purity (4.91 / 4.91) lowers cleanup cost for fine-tuning.
-* Interfaith objection handling slightly behind the per-row leader but gaps are modest and targetable later.
-* Chosen as stable anchor for longitudinal tracking; other models trade small gains for losses in core language fidelity.
-
-### Extended 500-Question Robustness Check
-We added a second evaluation on a random 500-question sample. Same rubric & judge; purpose: stability check, not to replace the baseline.
-
-| Criterion | Sub-criterion | llama-4-scout-extended | google-gemma-3-27b-extended | gpt-oss-120b-v2-extended |
-|-----------|---------------|-----------------------:|----------------------------:|--------------------------:|
-| Adherence | N/A | 4.47 | 4.56 | 🟩 **4.77** |
-| Kindness and Gentleness | N/A | 4.75 | 4.93 | 🟩 **4.95** |
-| Interfaith Sensitivity | Respect and Handling Objections | 3.12 | 3.60 | 🟩 **3.75** |
-| Interfaith Sensitivity | Objection Acknowledgement | 1.95 | 2.30 | 🟩 **2.32** |
-| Interfaith Sensitivity | Evangelism | 3.61 | 🟩 **4.46** | 4.15 |
-| Interfaith Sensitivity | Gospel Boldness | 4.38 | 🟩 **4.81** | 4.76 |
-| Arabic Accuracy | Grammar and Syntax | 4.45 | 🟩 **4.75** | 4.39 |
-| Arabic Accuracy | Theological Nuance | 4.08 | 4.30 | 🟩 **4.46** |
-| Arabic Accuracy | Contextual Clarity | 4.59 | 🟩 **4.81** | 4.56 |
-| Arabic Accuracy | Consistency of Terms | 4.70 | 🟩 **4.91** | 4.79 |
-| Arabic Accuracy | Arabic Purity | 4.67 | 🟩 **4.87** | 4.63 |
-|  | Mean | 4.070 | 🟩 **4.391** | 4.321 |
-
-Legend (extended): 🟩 Top 2 per row among extended models; **bold** above the row mean.
-
-Extended Takeaways (Concise): Pattern holds; `gemma-3-27b` stays linguistically strong and broadly balanced; gpt-oss-120b-v2-extended closes objection gaps but still trails in purity/consistency; no evidence to change the primary recommendation.
-
-
-## Fine-tuned Model Evaluations
-Current aggregated rubric means from `data/arabic/ft_evals/ft_evals_comparison.csv`:
-
-| Criterion | Sub-criterion | gtp-4-1-nano-ft |
-|-----------|---------------|----------------:|
-| Adherence | N/A | **3.59** |
-| Kindness and Gentleness | N/A | **4.25** |
-| Interfaith Sensitivity | Respect and Handling Objections | **2.96** |
-| Interfaith Sensitivity | Objection Acknowledgement | **1.92** |
-| Interfaith Sensitivity | Evangelism | **1.94** |
-| Interfaith Sensitivity | Gospel Boldness | **3.08** |
-| Arabic Accuracy | Grammar and Syntax | **3.53** |
-| Arabic Accuracy | Theological Nuance | **3.10** |
-| Arabic Accuracy | Contextual Clarity | **3.73** |
-| Arabic Accuracy | Consistency of Terms | **3.87** |
-| Arabic Accuracy | Arabic Purity | **3.80** |
+* **[Arabic LLM Eval](./resources/Arabic%20LLM%20Evals.md)**
 
 ---
 
 ## Directory Highlights
+
 ```
 data/
 	arabic/
