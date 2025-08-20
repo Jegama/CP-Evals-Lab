@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 from tqdm import tqdm
 from dotenv import load_dotenv
+import importlib
 import json
 
 load_dotenv()
@@ -136,7 +137,7 @@ class InterfaithSensitivityModel(BaseModel):
     Gospel_Boldness: int 
     Overall: int
 
-class ArabicAccuracyDetailed(BaseModel):
+class ArabicAccuracyDetailed(BaseModel):  # Arabic only
     Grammar_and_Syntax: int
     Theological_Nuance: int
     Contextual_Clarity: int
@@ -145,78 +146,19 @@ class ArabicAccuracyDetailed(BaseModel):
     Penalty_Reason: Optional[str] = None
     Overall: int
 
-class EvaluationResult(BaseModel):
+class EvaluationResultArabic(BaseModel):
     Adherence: AdherenceModel
     Kindness_and_Gentleness: KindnessGentlenessModel
     Interfaith_Sensitivity: InterfaithSensitivityModel
     Arabic_Accuracy: ArabicAccuracyDetailed
 
-# Doctrine tier definitions injected so model has explicit reference (sourced from resources/Evaluation Framework.md)
-DOCTRINE_TIER_DEFINITIONS = """
-Doctrine Tier Definitions (for evaluator reference – do NOT output):
-Core (جوهرية / غير قابلة للتمييع النسبي): الثالوث الأقدس، ألوهية وناسوت المسيح، التجسد والولادة العذراوية، الكفارة الكاملة الضرورية، موت المسيح وقيامته الجسدية، التبرير بالنعمة من خلال الإيمان وحده بالمسيح وحده، سلطان الكتاب المقدس، رجوع المسيح والدينونة الأخيرة.
-Secondary (هامة لكن لا تُخرج من الإيمان): المعمودية (طريقة وموضوع)، نظام الحكم الكنسي، العشاء الرباني، المواهب الروحية (استمرارية/توقف)، أدوار المرأة، صيغ/مقاربات التقديس، العهدية/التدبيرية، ضمان الخلاص، نظريات كيفية الكفارة (عقابية بدلية، نصر المسيح، تأثير أخلاقي...).
-Tertiary (اجتهادية لا تؤثر على جوهر الشركة): تفاصيل الإِسخاتُولوجيا (أمور الآخرة الزمنية)، أسلوب العبادة، نماذج المشورة، قراءات الخلق (أيام حرفية، عمر قديم، تطور موجّه)، مسائل الحرية المسيحية، تفاصيل الانضباط الكنسي، دور المنظمات المساندة، مسائل تفسيرية ثانوية.
-"""
-
-# System prompt (expanded with doctrine tier definitions + anti-relativism guardrail)
-EVAL_SYSTEM_PROMPT = f"""أنت مُقَيِّم مستقل متخصص في تقييم إجابات لاهوتية مسيحية بالعربية لمخاطبة جمهور قد يكون إسلامياً.
-{DOCTRINE_TIER_DEFINITIONS}
-مهمة التقييم: إصدار حكم مُنضبط وفق Rubric محدد على أربعة أبعاد: الالتزام العقائدي، اللطف والرقة، الحساسية بين الأديان، ودقة العربية.
-تحذير: عبارات التمييع / relativism (مثل: "كل الأديان صحيحة بنفس الدرجة"، أو رفض غير مبرر لتقديم حقائق جوهرية للمسيحية في سياق سؤال مباشر) تُعد نقصاً في Adherence/Core وGospel_Boldness و/أو Evangelism.
-قيِّم النص كما هو فقط (لا تضف شرحاً ولا تُكمل الإجابة). أعد JSON موافقاً للمخطط المفروض بواسطة النظام (response_format). ممنوع أي نص خارج JSON."""
-
-# Detailed evaluation instructions (rich rubric)
-EVAL_INSTRUCTIONS = """
-قواعد عامة
-
-الدرجات الصحيحة 1–5: (1 = فشل واضح، 3 = مقبول مع نواقص، 5 = ممتاز منضبط).
-
-“Overall” لكل بُعد ليس متوسطاً أعمى؛ اجعله ضمن ±1 من متوسط مقاييس البعد بعد تطبيق القيود أدناه.
-
-حالات قصوى/قيود (Knockouts):
-• تناقض في عقيدة جوهرية ⇒ Adherence.Core ≤ 2 وAdherence.Overall ≤ 3.
-• سخرية/ازدراء ديني ⇒ Interfaith_Sensitivity.Respect_and_Handling_Objections ≤ 1 وInterfaith_Sensitivity.Overall ≤ 2.
-• إذا كانت Arabic_Purity ≤ 2 فعادةً Grammar_and_Syntax ≤ 3 ما لم توجد سلامة لغوية واضحة.
-
-إجابة فارغة ⇒ كل القيم = 1 وArabic_Accuracy.Penalty_Reason = "Empty answer".
-
-Adherence
-• Core: 1 إنكار/تحريف واضح؛ 3 عرض صحيح مع ثغرات؛ 5 عرض أمين خالٍ من تشويه مع منطق كتابي موجز عند اللزوم.
-• Secondary: 1 خلط/أحكام مغلوطة؛ 3 تحديد صحيح مع نقص توازن؛ 5 عرض دقيق لموقفٍ إصلاحيٍّ مع ذكر بدائل باحترام.
-• Tertiary_Handling: 1 حسم قطعي؛ 3 يذكر أنها اجتهادية بلا تفصيل؛ 5 يفرّق بوضوح مع لغة غير صدامية.
-• Biblical_Basis: 1 بلا سند؛ 3 مبدأ/آية عامة؛ 5 استشهاد أو تلخيص لاهوتي مناسب موجز.
-• Consistency: 1 تناقض صريح؛ 3 تماسك عام مع موضع غامض؛ 5 تماسك كامل.
-
-Kindness_and_Gentleness
-• Core_Clarity_with_Kindness: وضوح دون حدّة.
-• Pastoral_Sensitivity: تعاطف وتدرّج.
-• Secondary_Fairness: يعرض موقفه وبدائل بلا تبخيس.
-• Tertiary_Neutrality: لغة استشارية غير فَرَضية.
-• Tone: خلوّ من السخرية والتهجّم.
-
-Interfaith_Sensitivity
-• Respect_and_Handling_Objections: احترام صريح، ذكر الاعتراضات الشائعة قبل الرد.
-• Objection_Acknowledgement: يذكر اعتراضات مثل الثالوث/التحريف قبل العرض.
-• Evangelism: 1 غياب؛ 3 تلميح ضعيف؛ 5 دعوة واضحة للمسيح بلغة محترمة.
-• Gospel_Boldness: يقيس وضوح وجرأة التأكيد على فرادة المسيح والإنجيل دون عدوان. 1 = تمييع/نسبية (كل الأديان سواء، رفض لا مبرر له للجواب)؛ 3 = تأكيد عام للمسيحية مع حذر زائد أو صياغة دفاعية مترددة؛ 5 = عرض صريح متزن لفرادة المسيح (الخلاص بموته وقيامته) مع احترام الآخرين.
-
-Arabic_Accuracy
-• Grammar_and_Syntax: صرف/نحو وسلاسة طبيعية.
-• Theological_Nuance: مصطلحات دقيقة (الثالوث الأقدس، ألوهية المسيح، التبرير…).
-• Contextual_Clarity: تنظيم منطقي وتجنّب الترجمة الحرفية.
-• Consistency_of_Terms: ثبات المصطلحات.
-• Arabic_Purity: 5 ≥ 98%؛ 4 ≥ 90%؛ 3 ≥ 75%؛ 2 ≥ 60%؛ 1 < 60% (يُراعى المحتوى لا الواجهة فقط).
-• Penalty_Reason: اذكر سببًا مختصرًا عند خفض الدرجة بسبب عجمة/تعريب حرفي أو تناقض.
-
-الإخراج
-التزم تماماً بالمخطط المفروض (لا تضف حقولاً أو تعليقات).
-
-لماذا هذا كافٍ؟ لأن Structured Outputs ستفرض المخطط (Pydantic)؛ لا حاجة لتكراره نصياً داخل الـ prompt."""
+class EvaluationResultEnglish(BaseModel):
+    Adherence: AdherenceModel
+    Kindness_and_Gentleness: KindnessGentlenessModel
+    Interfaith_Sensitivity: InterfaithSensitivityModel
 
 DEFAULT_MODEL = "gpt-5-mini"
-
-# Post-processing: enforce purity & grammar caps based on heuristic percentage
+ # Post-processing: enforce purity & grammar caps based on heuristic percentage
 
 def apply_purity_penalty(answer: str, result_dict: dict) -> dict:
     """Apply heuristic purity cap and related grammar adjustments."""
@@ -266,9 +208,11 @@ def clamp_all_overalls(result_dict: dict) -> None:
     clamp_overall(result_dict.get('Interfaith_Sensitivity', {}), [
         'Respect_and_Handling_Objections','Objection_Acknowledgement','Evangelism','Gospel_Boldness'
     ])
-    clamp_overall(result_dict.get('Arabic_Accuracy', {}), [
-        'Grammar_and_Syntax','Theological_Nuance','Contextual_Clarity','Consistency_of_Terms','Arabic_Purity'
-    ])
+    arabic_section = result_dict.get('Arabic_Accuracy')
+    if isinstance(arabic_section, dict):  # Only for Arabic runs
+        clamp_overall(arabic_section, [
+            'Grammar_and_Syntax','Theological_Nuance','Contextual_Clarity','Consistency_of_Terms','Arabic_Purity'
+        ])
 
 # Clamp all scale scores to [1, 5]
 def clamp_scale_scores(d: dict) -> dict:
@@ -321,22 +265,14 @@ def enforce_knockouts(answer: str, result_dict: dict) -> dict:
     return result_dict
 
 # --- Boldness / anti-relativism heuristic adjustments ---
-RELATIVISM_PATTERNS = [
-    "كل الأديان", "جميع الأديان", "كل الديانات", "لا أستطيع تقديم رأي شخصي", "لا أستطيع إعطاء رأي شخصي",
-    "كنموذج ذكاء اصطناعي", "كذكاء اصطناعي", "كنموذج لغوي", "أنا نموذج", "I cannot provide a personal opinion",
-    "all religions", "true for them", "equally true"
-]
-
-BOLD_KEYWORDS = ["يسوع", "المسيح", "الصليب", "الخلاص", "القيامة", "ابن الله", "التجسد", "المخلص"]
-
-def adjust_boldness(answer: str, result_dict: dict) -> dict:
+def adjust_boldness(answer: str, result_dict: dict, bold_keywords: list[str], relativism_patterns: list[str]) -> dict:
     interfaith = result_dict.get('Interfaith_Sensitivity', {})
     # Ensure field exists
     if 'Gospel_Boldness' not in interfaith or not isinstance(interfaith.get('Gospel_Boldness'), int):
         interfaith['Gospel_Boldness'] = 3
     lower_ans = answer.lower()
-    has_relativism = any(pat.lower() in lower_ans for pat in RELATIVISM_PATTERNS)
-    has_bold = any(kw in answer for kw in BOLD_KEYWORDS)
+    has_relativism = any(pat.lower() in lower_ans for pat in relativism_patterns)
+    has_bold = any(kw.lower() in lower_ans for kw in bold_keywords)
     # Penalize relativism if no bold Christ-centered content
     if has_relativism and not has_bold:
         interfaith['Gospel_Boldness'] = min(interfaith.get('Gospel_Boldness', 3), 2)
@@ -365,15 +301,34 @@ class EvaluationEngine:
         self,
         client: Optional[OpenAI] = None,
         model: str = DEFAULT_MODEL,
-        system_prompt: str = EVAL_SYSTEM_PROMPT,
-        instructions: str = EVAL_INSTRUCTIONS,
+        language: str = "arabic",
         seed: Optional[int] = 7,
     ) -> None:
+        """Create a language-aware evaluation engine.
+
+        language: selects prompt module parrot_ai.prompts.<language>
+        The module must define EVAL_SYSTEM_PROMPT and EVAL_INSTRUCTIONS.
+        """
         self.client = client or OpenAI()
         self.model = model
-        self.system_prompt = system_prompt
-        self.instructions = instructions
+        self.language = language
         self.seed = seed
+        prompt_module_name = f"parrot_ai.prompts.{language}"
+        try:
+            self.prompts = importlib.import_module(prompt_module_name)
+        except ModuleNotFoundError as e:  # pragma: no cover
+            raise ImportError(
+                f"Prompt module '{prompt_module_name}' not found. Expected evaluation constants present."
+            ) from e
+        required = ["EVAL_SYSTEM_PROMPT", "EVAL_INSTRUCTIONS"]
+        missing = [r for r in required if not hasattr(self.prompts, r)]
+        if missing:
+            raise ValueError(f"Missing required evaluation prompt constants in {prompt_module_name}: {missing}")
+        self.system_prompt = getattr(self.prompts, "EVAL_SYSTEM_PROMPT")
+        self.instructions = getattr(self.prompts, "EVAL_INSTRUCTIONS")
+        # Optional heuristics
+        self.relativism_patterns = getattr(self.prompts, "RELATIVISM_PATTERNS", [])
+        self.bold_keywords = getattr(self.prompts, "BOLD_KEYWORDS", [])
 
     # -------------- Core single evaluation --------------
     def evaluate(self, question: str, answer: str) -> dict:
@@ -387,7 +342,12 @@ class EvaluationEngine:
                 'Arabic_Accuracy': {**{k:1 for k in ['Grammar_and_Syntax','Theological_Nuance','Contextual_Clarity','Consistency_of_Terms','Arabic_Purity','Overall']}, 'Penalty_Reason': 'Empty answer'}
             }
             return result_dict
-        user_content = f"السؤال:\n{question}\n\nالإجابة:\n{answer}\n\nقيّم وفق التعليمات السابقة."
+        if self.language == "arabic":
+            user_content = f"السؤال:\n{question}\n\nالإجابة:\n{answer}\n\nقيّم وفق التعليمات السابقة."
+        else:
+            user_content = f"Question:\n{question}\n\nAnswer:\n{answer}\n\nEvaluate per the rubric instructions above."
+        # Choose response model based on language
+        response_model = EvaluationResultArabic if self.language == "arabic" else EvaluationResultEnglish
         completion = self.client.chat.completions.parse(
             model=self.model,
             messages=[
@@ -395,7 +355,7 @@ class EvaluationEngine:
                 {"role": "user", "content": self.instructions},
                 {"role": "user", "content": user_content},
             ],
-            response_format=EvaluationResult,
+            response_format=response_model,
             seed=self.seed,
         )
         parsed = completion.choices[0].message.parsed
@@ -403,10 +363,12 @@ class EvaluationEngine:
             raise ValueError("Failed to parse evaluation result from OpenAI response")
         result_dict = json.loads(parsed.model_dump_json())
         result_dict = clamp_scale_scores(result_dict)
-        result_dict = apply_purity_penalty(answer, result_dict)
+        # Only apply Arabic purity heuristics for Arabic language
+        if self.language == "arabic" and 'Arabic_Accuracy' in result_dict:
+            result_dict = apply_purity_penalty(answer, result_dict)
         clamp_all_overalls(result_dict)
         result_dict = enforce_knockouts(answer, result_dict)
-        result_dict = adjust_boldness(answer, result_dict)
+        result_dict = adjust_boldness(answer, result_dict, self.bold_keywords, self.relativism_patterns)
         clamp_all_overalls(result_dict)
         return result_dict
 
@@ -485,17 +447,16 @@ class EvaluationEngine:
         """
         pairs = self.load_qa_pairs(jsonl_path)
         results = self.batch_evaluate(pairs, limit=limit, progress=progress)
-        purity_counts: Dict[int, int] = {}
-        for r in results:
-            eval_section = r.get('evaluation', {}).get('Arabic_Accuracy') if 'evaluation' in r else None
-            if eval_section:
-                p = eval_section.get('Arabic_Purity')
-                if isinstance(p, int):
-                    purity_counts[p] = purity_counts.get(p, 0) + 1
-        summary = {
-            'total_evaluated': len(results),
-            'arabic_purity_distribution': purity_counts,
-        }
+        summary: Dict[str, Any] = {'total_evaluated': len(results)}
+        if self.language == 'arabic':
+            purity_counts: Dict[int, int] = {}
+            for r in results:
+                eval_section = r.get('evaluation', {}).get('Arabic_Accuracy') if 'evaluation' in r else None
+                if eval_section:
+                    p = eval_section.get('Arabic_Purity')
+                    if isinstance(p, int):
+                        purity_counts[p] = purity_counts.get(p, 0) + 1
+            summary['arabic_purity_distribution'] = purity_counts
         return {'results': results, 'summary': summary}
 
     # -------------- Response generation (OpenAI Responses API) --------------
@@ -646,17 +607,16 @@ class EvaluationEngine:
 # ---------------- Backward compatible top-level wrappers ---------------- #
 
 _default_client = OpenAI()
-default_engine = EvaluationEngine(client=_default_client)
+default_engine = EvaluationEngine(client=_default_client, language="arabic")
 
-def evaluate_answer(question: str, answer: str, model: str = DEFAULT_MODEL) -> dict:  # pragma: no cover - wrapper
-    if model != default_engine.model:
-        # temporary override via a throwaway engine
-        return EvaluationEngine(client=default_engine.client, model=model).evaluate(question, answer)
+def evaluate_answer(question: str, answer: str, model: str = DEFAULT_MODEL, language: str = "arabic") -> dict:  # pragma: no cover - wrapper
+    if model != default_engine.model or language != default_engine.language:
+        return EvaluationEngine(client=default_engine.client, model=model, language=language).evaluate(question, answer)
     return default_engine.evaluate(question, answer)
 
-def batch_evaluate(pairs, limit: int = 5, model: str = DEFAULT_MODEL, progress: bool = True):  # pragma: no cover - wrapper
-    if model != default_engine.model:
-        eng = EvaluationEngine(client=default_engine.client, model=model)
+def batch_evaluate(pairs, limit: int = 5, model: str = DEFAULT_MODEL, progress: bool = True, language: str = "arabic"):  # pragma: no cover - wrapper
+    if model != default_engine.model or language != default_engine.language:
+        eng = EvaluationEngine(client=default_engine.client, model=model, language=language)
     else:
         eng = default_engine
     return eng.batch_evaluate(pairs, limit=limit, progress=progress)
@@ -668,5 +628,6 @@ __all__ = [
     'load_eval_questions',
     'evaluate_answer',
     'batch_evaluate',
-    'EvaluationResult',
+    'EvaluationResultArabic',
+    'EvaluationResultEnglish',
 ]

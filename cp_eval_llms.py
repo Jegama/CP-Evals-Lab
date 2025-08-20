@@ -29,19 +29,21 @@ from __future__ import annotations
 import argparse, csv, json, re, sys, random, math
 from datetime import datetime as dt
 from pathlib import Path
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Tuple, Set, Optional
 from parrot_ai.llm_evaluation import (
     EvaluationEngine,
     load_qa_pairs as base_load_qa_pairs,
     load_eval_questions,
 )
-CSV_ROWS_ORDER = [
+BASE_CSV_ROWS = [
     ("Adherence", None),
     ("Kindness_and_Gentleness", None),
     ("Interfaith_Sensitivity", "Respect_and_Handling_Objections"),
     ("Interfaith_Sensitivity", "Objection_Acknowledgement"),
     ("Interfaith_Sensitivity", "Evangelism"),
     ("Interfaith_Sensitivity", "Gospel_Boldness"),
+]
+ARABIC_EXTRA_ROWS = [
     ("Arabic_Accuracy", "Grammar_and_Syntax"),
     ("Arabic_Accuracy", "Theological_Nuance"),
     ("Arabic_Accuracy", "Contextual_Clarity"),
@@ -93,28 +95,38 @@ def generate_dataset(
     return str(out_path)
 
 def aggregate_scores(
-    results: List[dict]
+    results: List[dict],
+    include_arabic_accuracy: bool
 ) -> Dict[tuple, float]:
     agg: Dict[tuple, float] = {}
     counts: Dict[tuple, int] = {}
+    target_sections = ["Adherence", "Kindness_and_Gentleness", "Interfaith_Sensitivity"]
+    if include_arabic_accuracy:
+        target_sections.append("Arabic_Accuracy")
     for item in results:
         ev = item.get("evaluation")
-        if not ev: continue
-        for section in ("Adherence", "Kindness_and_Gentleness", "Interfaith_Sensitivity", "Arabic_Accuracy"):
+        if not ev:
+            continue
+        for section in target_sections:
             section_obj = ev.get(section, {})
+            if not isinstance(section_obj, dict):
+                continue
             for key, val in section_obj.items():
-                if key in ("Penalty_Reason", "Heuristic_Arabic_Purity_Pct"): continue
-                if not isinstance(val, int): continue
+                if key in ("Penalty_Reason", "Heuristic_Arabic_Purity_Pct"):
+                    continue
+                if not isinstance(val, int):
+                    continue
                 agg[(section, key)] = agg.get((section, key), 0) + val
                 counts[(section, key)] = counts.get((section, key), 0) + 1
     return {k: round(agg[k] / counts[k], 2) for k in agg if counts.get(k)}
 
 def ensure_csv_structure(
-    csv_path: Path
+    csv_path: Path,
+    rows_order: list[tuple[str, Optional[str]]]
 ) -> list[list[str]]:
     if not csv_path.exists():
-        rows = []
-        for section, sub in CSV_ROWS_ORDER:
+        rows: list[list[str]] = []
+        for section, sub in rows_order:
             rows.append([section, sub or "N/A"])  # no score columns yet
         return rows
     rows: list[list[str]] = []
@@ -128,9 +140,10 @@ def update_comparison_csv(
     csv_path: Path,
     answers_label: str,
     aggregated: Dict[tuple, float],
-    overwrite: bool
+    overwrite: bool,
+    rows_order: list[tuple[str, Optional[str]]]
 ) -> None:
-    rows = ensure_csv_structure(csv_path)
+    rows = ensure_csv_structure(csv_path, rows_order)
     existing_header_models: list[str] = []
     existing_header: list[str] = []
     if csv_path.exists():
@@ -261,7 +274,7 @@ def main(argv: List[str]) -> int:
         comparison_csv_path = default_comp_csv
 
     # Build judge engine
-    engine = EvaluationEngine(model=args.judge_model)
+    engine = EvaluationEngine(model=args.judge_model, language=args.language)
     print(f"[init] Judge model: {args.judge_model}")
     print(f"[init] Language: {args.language} | Mode: {args.mode}")
 
@@ -377,13 +390,16 @@ def main(argv: List[str]) -> int:
     print('[eval] Done.')
 
     # Aggregate
-    aggregated = aggregate_scores(results)
+    include_arabic_accuracy = args.language == "arabic"
+    aggregated = aggregate_scores(results, include_arabic_accuracy)
     print('[summary] Aggregated means:')
     for k in sorted(aggregated):
         print(f"  {k}: {aggregated[k]}")
 
     # Update comparison CSV
-    update_comparison_csv(comparison_csv_path, answers_label, aggregated, overwrite=args.overwrite)
+    # Build rows order dynamically for this run (if file already exists we retain its structure via ensure_csv_structure)
+    rows_order = BASE_CSV_ROWS + (ARABIC_EXTRA_ROWS if include_arabic_accuracy else [])
+    update_comparison_csv(comparison_csv_path, answers_label, aggregated, overwrite=args.overwrite, rows_order=rows_order)
 
     # Results JSONL placement (mode dependent)
     if args.mode in ("dataset", "extended"):
