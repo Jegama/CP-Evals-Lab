@@ -530,7 +530,7 @@ class EvaluationEngine:
     def generate_responses_together(
         self,
         questions: List[str],
-        model: str = "openai/gpt-oss-120b",
+        model: str = "google/gemma-3-12b-it",
         progress: bool = True,
     ) -> List[Dict[str, Any]]:
         """Generate answers using Together.ai chat completions API.

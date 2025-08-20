@@ -5,10 +5,13 @@ This file reads those dynamically so adding a new language only requires a new p
 """
 
 from typing import Union, Any
-from .core import ParrotAI, ParrotAIHF  # lightweight (ParrotAI heavy deps are lazy)
+from .core import ParrotAI, ParrotAIHF, ParrotAIOpenAI, ParrotAITogether  # lightweight (ParrotAI heavy deps are lazy)
 
 
-def _prompts(parrot_instance: Union[ParrotAI, ParrotAIHF]):
+ProviderType = Union[ParrotAI, ParrotAIHF, ParrotAIOpenAI, ParrotAITogether]
+
+
+def _prompts(parrot_instance: ProviderType):
     mod = getattr(parrot_instance, "prompts", None)
     if mod is None:
         raise ValueError("Parrot instance has no 'prompts' module loaded.")
@@ -20,7 +23,7 @@ def _require(mod: Any, name: str):
     return getattr(mod, name)
 
 
-def parrot_chain(data, parrot_instance: Union[ParrotAI, ParrotAIHF]):
+def parrot_chain(data, parrot_instance: ProviderType):
     """
     Execute a multi-step reasoning chain for theological questions.
     
@@ -87,7 +90,7 @@ def parrot_chain(data, parrot_instance: Union[ParrotAI, ParrotAIHF]):
     }
 
 
-def simple_chain(question: str, parrot_instance: Union[ParrotAI, ParrotAIHF]):
+def simple_chain(question: str, parrot_instance: ProviderType):
     """
     Execute a simple single-step generation for quick responses.
     
@@ -109,7 +112,7 @@ def simple_chain(question: str, parrot_instance: Union[ParrotAI, ParrotAIHF]):
     return parrot_instance.generate(reasoning_prompt, system=main_sys)
 
 
-def comparative_chain(question: str, parrot_instance: Union[ParrotAI, ParrotAIHF], system_prompts: list):
+def comparative_chain(question: str, parrot_instance: ProviderType, system_prompts: list):
     """
     Generate responses using multiple system prompts for comparison.
     

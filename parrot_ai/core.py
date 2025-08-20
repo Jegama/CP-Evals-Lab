@@ -11,8 +11,16 @@ ParrotAI (local model):
   - If a user calls any generation API before ``load_model`` an error is raised.
 
 ParrotAIHF (HF Inference API):
-  - Only depends on ``huggingface_hub`` (lightweight) and can be used without
-    ``torch`` installed.
+    - Only depends on ``huggingface_hub`` (lightweight) and can be used without
+        ``torch`` installed.
+
+ParrotAIOpenAI / ParrotAITogether:
+    - Lightweight API wrappers mirroring ParrotAIHF interface so higher-level
+        chains / dataset creators can swap providers uniformly.
+    - Environment variables required:
+                OPENAI_API_KEY  (for OpenAI)
+                TOGETHER_API_KEY (for Together AI)
+        These are loaded via python-dotenv if present.
 """
 
 import os
@@ -20,6 +28,7 @@ import importlib
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from typing import Any, cast, Optional
+from contextlib import suppress
 
 # --- Prompt module loader -------------------------------------------------
 def _load_prompts(language: str):
@@ -255,3 +264,121 @@ class ParrotAIHF:
             "Type: HuggingFace API Client",
         ]
         return "\n".join(info_lines)
+
+
+class ParrotAIOpenAI:
+    """OpenAI Chat Completions API wrapper with unified interface.
+
+    Relies on OPENAI_API_KEY being set. Mirrors ParrotAIHF methods: set_model, generate,
+    is_loaded, get_model_info. Language-specific system prompts loaded identically.
+    """
+
+    def __init__(self, language: str = "arabic"):
+        load_dotenv()
+        try:
+            from openai import OpenAI  # type: ignore
+        except ImportError as e:  # pragma: no cover
+            raise ImportError("openai package not installed. Add it to requirements.txt") from e
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise ValueError("OPENAI_API_KEY must be set in environment variables")
+        self._client = OpenAI()
+        self.model_name: Optional[str] = None
+        self.language = language
+        self.prompts = _load_prompts(language)
+        print("OpenAI client initialized")
+
+    def set_model(self, model_name: str):
+        self.model_name = model_name
+        print(f"Model set to: {model_name}")
+
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> str:
+        model_to_use = model or self.model_name or "gpt-5-mini"
+        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        resp = self._client.responses.create(
+            model=model_to_use,
+            input=messages
+        )
+        answer = getattr(resp, 'output_text', "")
+        
+        return answer
+
+    def is_loaded(self) -> bool:
+        return self._client is not None
+
+    def get_model_info(self) -> str:
+        return "\n".join([
+            "Provider: openai",
+            f"Current Model: {self.model_name or 'Not set (will use default)'}",
+            "Type: OpenAI Chat Completions Client",
+        ])
+
+
+class ParrotAITogether:
+    """Together AI Chat Completions API wrapper with unified interface.
+
+    Requires TOGETHER_API_KEY. Mirrors ParrotAIHF & ParrotAIOpenAI.
+    """
+
+    def __init__(self, language: str = "arabic"):
+        load_dotenv()
+        try:
+            from together import Together  # type: ignore
+        except ImportError as e:  # pragma: no cover
+            raise ImportError("together package not installed. Add it to requirements.txt") from e
+        if not os.environ.get("TOGETHER_API_KEY"):
+            raise ValueError("TOGETHER_API_KEY must be set in environment variables")
+        self._client = Together()
+        self.model_name: Optional[str] = None
+        self.language = language
+        self.prompts = _load_prompts(language)
+        print("Together AI client initialized")
+
+    def set_model(self, model_name: str):
+        self.model_name = model_name
+        print(f"Model set to: {model_name}")
+
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        model: Optional[str] = None
+    ) -> str:
+        model_to_use = model or self.model_name or "google/gemma-3-12b-it"
+        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        completion = self._client.chat.completions.create(
+            model=model_to_use,
+            messages=messages,
+        )
+        with suppress(Exception):
+            # Together returns similar structure with choices
+            choices = getattr(completion, 'choices', None)
+            if choices:
+                msg = getattr(choices[0], 'message', None)
+                if msg:
+                    content = getattr(msg, 'content', '')
+                    if isinstance(content, str):
+                        return content
+        return ""
+
+    def is_loaded(self) -> bool:
+        return self._client is not None
+
+    def get_model_info(self) -> str:
+        return "\n".join([
+            "Provider: together",
+            f"Current Model: {self.model_name or 'Not set (will use default)'}",
+            "Type: Together AI Chat Completions Client",
+        ])
