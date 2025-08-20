@@ -7,8 +7,11 @@ don't need heavy local model deps (torch, transformers, bitsandbytes) installed.
 now lazily imported inside ``ParrotAI.load_model`` (see ``core.py``).
 """
 
-from .core import ParrotAI, ParrotAIHF, ParrotAIOpenAI, ParrotAITogether  # noqa: F401
+from .core import LocalModelParrotAI, ParrotAIHF, ParrotAIOpenAI, ParrotAITogether, ParrotAIGemini, ParrotAIGrok  # noqa: F401
 from .chains import parrot_chain  # noqa: F401
 
+# Backward compatibility alias
+ParrotAI = LocalModelParrotAI
+
 __version__ = "0.1.1"
-__all__ = ["ParrotAI", "ParrotAIHF", "ParrotAIOpenAI", "ParrotAITogether", "parrot_chain"]
+__all__ = ["ParrotAI", "LocalModelParrotAI", "ParrotAIHF", "ParrotAIOpenAI", "ParrotAITogether", "ParrotAIGemini", "ParrotAIGrok", "parrot_chain"]

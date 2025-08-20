@@ -33,7 +33,7 @@ from tqdm import tqdm
 from dotenv import load_dotenv
 load_dotenv()
 
-from parrot_ai import ParrotAI, ParrotAIHF, parrot_chain
+from parrot_ai import LocalModelParrotAI, ParrotAIHF, parrot_chain
 # Prompt module will be selected dynamically based on --language
 parrot_prompts = None  # will be set in main()
 

@@ -7,10 +7,6 @@ function-based workflow so notebooks can simply do:
     engine = EvaluationEngine(model="gpt-5-mini")  # or use default_engine
     pairs = engine.load_qa_pairs("data/arabic/ar_training_dataset_small_model.jsonl")
     results = engine.batch_evaluate(pairs, limit=10)
-
-Backward compatibility: the previous top-level functions ``load_qa_pairs``,
-``evaluate_answer`` and ``batch_evaluate`` remain as thin wrappers delegating
-to a module-level ``default_engine`` instance so existing notebooks continue to work.
 """
 
 import json
@@ -25,7 +21,7 @@ from .evaluation_schemas import (
     EvaluationResultArabic,
     EvaluationResultEnglish,
 )
-from .core import ParrotAIOpenAI, ParrotAITogether
+from .core import ParrotAIOpenAI, ParrotAITogether, ParrotAIGemini, ParrotAIGrok, ParrotAIHF
 
 load_dotenv()
 
@@ -419,116 +415,107 @@ class EvaluationEngine:
             summary['arabic_purity_distribution'] = purity_counts
         return {'results': results, 'summary': summary}
 
-    # -------------- Response generation (OpenAI wrapper) --------------
-    def generate_responses_openai(
+    # -------------- Unified response generation --------------
+    def generate_responses(
         self,
         questions: List[str],
+        provider: str = "openai",
         model: Optional[str] = None,
         progress: bool = True,
+        **kwargs
     ) -> List[Dict[str, Any]]:
-        wrapper = ParrotAIOpenAI(language=self.language)
+        """Generate responses using any supported provider.
+        
+        Args:
+            questions: List of questions to generate responses for
+            provider: One of 'openai', 'together', 'hf', 'gemini', 'grok'
+            model: Model name to use (if None, uses provider default)
+            progress: Whether to show progress bar
+            **kwargs: Additional arguments passed to the provider wrapper
+        """
+        # Provider mapping
+        provider_classes = {
+            'openai': ParrotAIOpenAI,
+            'together': ParrotAITogether,
+            'hf': ParrotAIHF,
+            'gemini': ParrotAIGemini,
+            'grok': ParrotAIGrok,
+        }
+        
+        # Default models per provider
+        default_models = {
+            'openai': 'gpt-5-mini',
+            'together': 'google/gemma-3-27b-it',
+            'hf': 'google/gemma-3-27b-it',
+            'gemini': 'gemini-2.5-flash',
+            'grok': 'grok-3-mini',
+        }
+        
+        if provider not in provider_classes:
+            raise ValueError(f"Unsupported provider: {provider}. Must be one of: {list(provider_classes.keys())}")
+        
+        # Initialize the appropriate wrapper
+        wrapper_class = provider_classes[provider]
+        if provider == 'hf':
+            # HF wrapper needs provider argument
+            hf_provider = kwargs.get('hf_provider', 'nebius')
+            wrapper = wrapper_class(language=self.language, provider=hf_provider)
+        else:
+            wrapper = wrapper_class(language=self.language)
+        
+        # Set model if provided
+        use_model = model or default_models[provider]
         if model:
             wrapper.set_model(model)
-        use_model = model or wrapper.model_name
+        
         out: List[Dict[str, Any]] = []
         bar = None
         if progress:
             try:
-                bar = tqdm(total=len(questions), desc="Generating (OpenAI)", unit="q")
+                bar = tqdm(total=len(questions), desc=f"Generating ({provider.title()})", unit="q")
             except Exception:
                 bar = None
+        
         for i, q in enumerate(questions):
-            answer = wrapper.generate(prompt=q, model=use_model)
-            out.append({
-                'index': i,
-                'question': q,
-                'answer': answer,
-                'model': use_model,
-                'provider': 'openai'
-            })
+            try:
+                answer = wrapper.generate(prompt=q, model=use_model)
+                out.append({
+                    'index': i,
+                    'question': q,
+                    'answer': answer,
+                    'model': use_model,
+                    'provider': provider
+                })
+            except Exception as e:
+                out.append({
+                    'index': i,
+                    'question': q,
+                    'error': str(e),
+                    'model': use_model,
+                    'provider': provider
+                })
+            
             if bar:
                 bar.update(1)
+        
         if bar:
             bar.close()
         return out
 
-    def generate_responses_openai_from_file(
+    def generate_responses_from_file(
         self,
         question_file: str = "data/arabic/ar_eval_questions.txt",
         limit: int = 100,
         **kwargs,
     ) -> List[Dict[str, Any]]:
-        """Load questions from file then call ``generate_responses_openai``."""
+        """Load questions from file then call ``generate_responses``."""
         questions = load_eval_questions(question_file, limit=limit)
-        return self.generate_responses_openai(questions, **kwargs)
-
-    # -------------- Response generation (Together wrapper) --------------
-    def generate_responses_together(
-        self,
-        questions: List[str],
-        model: str = "google/gemma-3-27b-it",
-        progress: bool = True,
-    ) -> List[Dict[str, Any]]:
-        wrapper = ParrotAITogether(language=self.language)
-        if model:
-            wrapper.set_model(model)
-        out: List[Dict[str, Any]] = []
-        bar = None
-        if progress:
-            try:
-                bar = tqdm(total=len(questions), desc="Generating (Together)", unit="q")
-            except Exception:
-                bar = None
-        for i, q in enumerate(questions):
-            answer = wrapper.generate(prompt=q, model=model)
-            out.append({
-                'index': i,
-                'question': q,
-                'answer': answer,
-                'model': model,
-                'provider': 'together'
-            })
-            if bar:
-                bar.update(1)
-        if bar:
-            bar.close()
-        return out
-
-    def generate_responses_together_from_file(
-        self,
-        question_file: str = "data/arabic/ar_eval_questions.txt",
-        limit: int = 100,
-        **kwargs,
-    ) -> List[Dict[str, Any]]:
-        """Load questions from file then call ``generate_responses_together``."""
-        questions = load_eval_questions(question_file, limit=limit)
-        return self.generate_responses_together(questions, **kwargs)
-
-
-# ---------------- Backward compatible top-level wrappers ---------------- #
-
-_default_client = OpenAI()
-default_engine = EvaluationEngine(client=_default_client, language="arabic")
-
-def evaluate_answer(question: str, answer: str, model: str = DEFAULT_MODEL, language: str = "arabic") -> dict:  # pragma: no cover - wrapper
-    if model != default_engine.model or language != default_engine.language:
-        return EvaluationEngine(client=default_engine.client, model=model, language=language).evaluate(question, answer)
-    return default_engine.evaluate(question, answer)
-
-def batch_evaluate(pairs, limit: int = 5, model: str = DEFAULT_MODEL, progress: bool = True, language: str = "arabic"):  # pragma: no cover - wrapper
-    if model != default_engine.model or language != default_engine.language:
-        eng = EvaluationEngine(client=default_engine.client, model=model, language=language)
-    else:
-        eng = default_engine
-    return eng.batch_evaluate(pairs, limit=limit, progress=progress)
+        return self.generate_responses(questions, **kwargs)
 
 __all__ = [
     'EvaluationEngine',
-    'default_engine',
     'load_qa_pairs',
     'load_eval_questions',
-    'evaluate_answer',
-    'batch_evaluate',
     'EvaluationResultArabic',
     'EvaluationResultEnglish',
 ]

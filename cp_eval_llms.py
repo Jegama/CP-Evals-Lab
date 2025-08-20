@@ -2,7 +2,7 @@
 
 Features:
 1. Evaluate an existing JSONL dataset of messages (system,user,assistant) pairs.
-2. Or generate answers from a questions file using OpenAI or Together backends, save a dataset JSONL, then evaluate.
+2. Or generate answers from a questions file using various API providers, save a dataset JSONL, then evaluate.
 3. Append aggregated rubric scores to a wide comparison CSV (criteria rows, model columns).
 4. Append raw evaluation result lines to a JSONL results file (one JSON object per line) preserving previous runs.
 
@@ -11,22 +11,28 @@ is a list like: [ {role: system, content: ...}, {role: user, content: ...}, {rol
 
 Usage examples (Windows CMD):
   1) Evaluate existing dataset produced by model "google:gemma-3-7b" (judge defaults to gpt-5-mini):
-      python evaluate.py --mode dataset --dataset data/arabic/ar_training_dataset_small_model.jsonl --answers-label google:gemma-3-7b
+      python cp_eval_llms.py --mode dataset --dataset data/arabic/ar_training_dataset_small_model.jsonl --answers-label google:gemma-3-7b
 
   2) Evaluate existing dataset overriding judge model:
-      python evaluate.py --mode dataset --dataset data/arabic/ar_training_dataset_small_model.jsonl --answers-label google:gemma-3-7b --judge-model gpt-5-omni
+      python cp_eval_llms.py --mode dataset --dataset data/arabic/ar_training_dataset_small_model.jsonl --answers-label google:gemma-3-7b --judge-model gpt-5
 
-  3) Generate answers (OpenAI) using provider model then label them simply "gemma7" and judge with default gpt-5-mini:
-      python evaluate.py --mode generate-openai --questions-file data/arabic/ar_eval_questions.txt --gen-model google:gemma-3-7b --answers-label gemma7
+  3) Generate answers (OpenAI) for API evaluation with system prompt:
+      python cp_eval_llms.py --mode generate-api_evals --provider openai --gen-model gpt-5-mini --answers-label gpt-5-mini-prompt --use-system-prompt
 
-  4) Generate with Together provider model but label column "llama8":
-      python evaluate.py --mode generate-together --gen-model meta-llama/Meta-Llama-3-8B-Instruct --answers-label llama8
+  4) Generate answers (Together) for fine-tuned model evaluation:
+      python cp_eval_llms.py --mode generate-ft_evals --provider together --gen-model meta-llama/Meta-Llama-3-8B-Instruct --answers-label llama8
+
+  5) Generate answers using Gemini without system prompt:
+      python cp_eval_llms.py --mode generate-api_evals --provider gemini --gen-model gemini-2.5-flash --answers-label gemini-2.5-flash-vanilla
+
+  6) Generate answers using Grok without system prompt:
+      python cp_eval_llms.py --mode generate-api_evals --provider grok --gen-model grok-3-mini --answers-label grok-3-mini-vanilla
 
 If the comparison CSV exists, a new model column is appended. If the model name already exists,
 either pass --overwrite to replace it, or a numeric suffix will be added automatically.
 """
 from __future__ import annotations
-import argparse, csv, json, re, sys, random, math
+import argparse, csv, json, re, sys, random, math, importlib
 from datetime import datetime as dt
 from pathlib import Path
 from typing import Dict, List, Tuple, Set, Optional
@@ -61,35 +67,52 @@ def load_dataset_pairs(jsonl_path: str) -> List[Tuple[str, str]]:
     return base_load_qa_pairs(jsonl_path, question_list_path=None, limit=0)
 
 def generate_dataset(
-    mode: str,
+    provider: str,
     questions_file: str,
     gen_model: str,
     engine: EvaluationEngine,
-    output_dataset: str
+    output_dataset: str,
+    use_system_prompt: bool = False
 ) -> str:
     # Always use full questions file
     questions = load_eval_questions(questions_file)
     if not questions:
         raise SystemExit("No questions loaded for generation.")
-    if mode == "generate-openai":
-        responses = engine.generate_responses_openai(questions, model=gen_model)
-    elif mode == "generate-together":
-        responses = engine.generate_responses_together(questions, model=gen_model)
-    else:
-        raise ValueError(f"Unsupported generation mode: {mode}")
+    
+    # Get system prompt if requested
+    system_prompt = None
+    if use_system_prompt:
+        try:
+            prompt_module = importlib.import_module(f"parrot_ai.prompts.{engine.language}")
+            system_prompt = getattr(prompt_module, "MAIN_SYSTEM_PROMPT", None)
+        except (ImportError, AttributeError):
+            print(f"[warning] Could not load system prompt for language '{engine.language}', proceeding without system prompt")
+    
+    # Generate responses using the unified method
+    responses = engine.generate_responses(
+        questions, 
+        provider=provider, 
+        model=gen_model,
+        system=system_prompt
+    )
+    
     out_path = Path(output_dataset)
     mode_flag = "a" if out_path.exists() else "w"
     print(f"[generate] {'Appending to' if mode_flag=='a' else 'Creating'} dataset: {out_path}")
     with out_path.open(mode_flag, encoding="utf-8") as f:
         for r in responses:
+            if "error" in r:
+                print(f"[warning] Error generating response for question {r['index']}: {r['error']}")
+                continue
             obj = {"messages": [
-                {"role": "system", "content": ""},
+                {"role": "system", "content": system_prompt or ""},
                 {"role": "user", "content": r["question"]},
                 {"role": "assistant", "content": r["answer"]},
             ],
             "gen_model": gen_model,
             "provider": r.get("provider"),
             "timestamp": dt.now().isoformat(),
+            "use_system_prompt": use_system_prompt,
             }
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
     return str(out_path)
@@ -198,23 +221,26 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         data/<language>/
             ├─ training_datasets/
             │    └─ evals/ (dataset & extended modes comparison + results JSONL)
-            └─ ft_evals/  (generation modes: generated datasets, comparison + results JSONL)
+            ├─ ft_evals/  (generate-ft_evals mode: generated datasets, comparison + results JSONL)
+            └─ api_evals/ (generate-api_evals mode: generated datasets, comparison + results JSONL)
     """
     p = argparse.ArgumentParser(description="Generate and/or evaluate QA datasets.")
     p.add_argument("--language", choices=["arabic", "english"], default="arabic",
                    help="Language namespace: chooses data/<language>/ tree (default: arabic)")
-    p.add_argument("--mode", choices=["dataset", "extended", "generate-openai", "generate-together"], default="dataset",
-                   help="dataset: evaluate existing training dataset using fixed 100-question file; extended: random sample of max(500,10%) questions from dataset; generate-* : generate answers then evaluate (stored under ft_evals)")
+    p.add_argument("--mode", choices=["dataset", "extended", "generate-ft_evals", "generate-api_evals"], default="dataset",
+                   help="dataset: evaluate existing training dataset using fixed 100-question file; extended: random sample of max(500,10%%) questions from dataset; generate-ft_evals: generate answers for fine-tuned models; generate-api_evals: generate answers for API models")
     # dataset only required for dataset/extended modes; we validate later
     p.add_argument("--dataset", help="(dataset/extended modes) Existing dataset JSONL to evaluate (training_datasets). Not used for generate-* modes.")
     # questions file (not required for extended mode)
     p.add_argument("--questions-file", help="Evaluation questions file (default auto for dataset mode: data/<language>/<prefix>eval_questions.txt). Not required for extended mode unless supplied.")
+    p.add_argument("--provider", choices=["openai", "together", "hf", "gemini", "grok"], help="(generation modes only) API provider to use for generation (required for generate-* modes)")
     p.add_argument("--gen-model", help="(generation modes only) Provider model used to generate answers (required for generate-* modes)")
     p.add_argument("--answers-label", help="Human-friendly label for the answers column (defaults: gen-model or inferred from dataset)")
     p.add_argument("--judge-model", default="gpt-5-mini", help="Model used as evaluator (default: gpt-5-mini)")
+    p.add_argument("--use-system-prompt", action="store_true", help="Use MAIN_SYSTEM_PROMPT from language prompts module for generation (mainly for API evals)")
     p.add_argument("--comparison-csv", help="Override comparison CSV filename (placed automatically in proper directory if relative)")
     p.add_argument("--results-jsonl", help="Override results JSONL filename (auto directory based on mode & language if relative)")
-    p.add_argument("--output-dataset", help="(generation modes only) Output dataset filename (auto placed in ft_evals if relative; default auto name)")
+    p.add_argument("--output-dataset", help="(generation modes only) Output dataset filename (auto placed in ft_evals/api_evals if relative; default auto name)")
     p.add_argument("--overwrite", action="store_true", help="Overwrite comparison CSV column if answers-label already present")
     p.add_argument("--no-progress", action="store_true", help="Silence progress ticks during evaluation")
     return p.parse_args(argv)
@@ -247,7 +273,8 @@ def main(argv: List[str]) -> int:
     training_dir = base_lang_dir / "training_datasets"
     training_evals_dir = training_dir / "evals"
     ft_evals_dir = base_lang_dir / "ft_evals"
-    for d in (training_evals_dir, ft_evals_dir):
+    api_evals_dir = base_lang_dir / "api_evals"
+    for d in (training_evals_dir, ft_evals_dir, api_evals_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     # Infer questions file if not provided (not required for extended mode)
@@ -262,8 +289,11 @@ def main(argv: List[str]) -> int:
     # Comparison CSV path resolution
     if args.mode in ("dataset", "extended"):
         default_comp_csv = training_evals_dir / "dataset_eval_comparison.csv"
-    else:
+    elif args.mode == "generate-ft_evals":
         default_comp_csv = ft_evals_dir / "ft_evals_comparison.csv"
+    else:  # generate-api_evals
+        default_comp_csv = api_evals_dir / "api_evals_comparison.csv"
+        
     if args.comparison_csv:
         supplied = Path(args.comparison_csv)
         if supplied.is_absolute():
@@ -280,29 +310,40 @@ def main(argv: List[str]) -> int:
 
     generation_mode = args.mode.startswith("generate")
 
-    # MODE: generation (ft_evals)
+    # MODE: generation (ft_evals or api_evals)
     if generation_mode:
+        if not args.provider:
+            raise SystemExit("--provider required for generation modes")
         if not args.gen_model:
             raise SystemExit("--gen-model required for generation modes")
         if not answers_label:
             answers_label = args.gen_model
-        # Output dataset naming & placement (always in ft_evals)
-        auto_name = f"generated_{'openai' if args.mode=='generate-openai' else 'together'}_{sanitize_filename(args.gen_model)}.jsonl"
+            
+        # Output dataset naming & placement
+        if args.mode == "generate-ft_evals":
+            output_dir = ft_evals_dir
+            auto_name = f"generated_ft_{args.provider}_{sanitize_filename(args.gen_model)}.jsonl"
+        else:  # generate-api_evals
+            output_dir = api_evals_dir
+            auto_name = f"generated_api_{args.provider}_{sanitize_filename(args.gen_model)}.jsonl"
+            
         output_dataset_name = args.output_dataset or auto_name
         output_dataset_path = Path(output_dataset_name)
         if not output_dataset_path.is_absolute():
-            output_dataset_path = ft_evals_dir / output_dataset_path.name
+            output_dataset_path = output_dir / output_dataset_path.name
+            
         if output_dataset_path.exists():
             dataset_path = output_dataset_path
             print(f"[generate] Re-using existing generated dataset (no regeneration): {dataset_path}")
         else:
             dataset_path = Path(
                 generate_dataset(
-                    args.mode,
+                    args.provider,
                     questions_file,
                     args.gen_model,
                     engine,
                     str(output_dataset_path),
+                    args.use_system_prompt,
                 )
             )
             print(f"[generate] Dataset ready at {dataset_path}")
@@ -404,8 +445,11 @@ def main(argv: List[str]) -> int:
     # Results JSONL placement (mode dependent)
     if args.mode in ("dataset", "extended"):
         default_results_dir = training_evals_dir
-    else:
+    elif args.mode == "generate-ft_evals":
         default_results_dir = ft_evals_dir
+    else:  # generate-api_evals
+        default_results_dir = api_evals_dir
+        
     default_results_dir.mkdir(parents=True, exist_ok=True)
     if args.results_jsonl:
         supplied = Path(args.results_jsonl)
@@ -422,6 +466,8 @@ def main(argv: List[str]) -> int:
         'answers_label': answers_label,
         'judge_model': args.judge_model,
         'gen_model': args.gen_model,
+        'provider': args.provider if generation_mode else None,
+        'use_system_prompt': args.use_system_prompt if generation_mode else None,
         'questions_file': questions_file,
         'language': args.language,
         'mode': args.mode,

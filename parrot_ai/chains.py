@@ -5,10 +5,10 @@ This file reads those dynamically so adding a new language only requires a new p
 """
 
 from typing import Union, Any
-from .core import ParrotAI, ParrotAIHF, ParrotAIOpenAI, ParrotAITogether  # lightweight (ParrotAI heavy deps are lazy)
+from .core import LocalModelParrotAI, ParrotAIHF, ParrotAIOpenAI, ParrotAITogether, ParrotAIGemini, ParrotAIGrok  # lightweight (ParrotAI heavy deps are lazy)
 
 
-ProviderType = Union[ParrotAI, ParrotAIHF, ParrotAIOpenAI, ParrotAITogether]
+ProviderType = Union[LocalModelParrotAI, ParrotAIHF, ParrotAIOpenAI, ParrotAITogether, ParrotAIGemini, ParrotAIGrok]
 
 
 def _prompts(parrot_instance: ProviderType):

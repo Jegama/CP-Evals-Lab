@@ -52,7 +52,7 @@ def _load_prompts(language: str):
         ) from e
 
 
-class ParrotAI:
+class LocalModelParrotAI:
     """Local model wrapper with (optional) 4-bit quantization support.
 
     The class defers importing heavy libraries until ``load_model`` is called to
@@ -189,33 +189,62 @@ class ParrotAI:
             info_lines.append("Generation: Supported")
         return "\n".join(info_lines)
 
-class ParrotAIHF:
-    """A class for using HuggingFace API for text generation."""
+class BaseParrotAI:
+    """Base class for API-based ParrotAI implementations with shared functionality."""
+    
+    def __init__(self, language: str = "arabic"):
+        """Initialize base ParrotAI with common attributes."""
+        load_dotenv()
+        self.model_name: Optional[str] = None
+        self.language = language
+        self.prompts = _load_prompts(language)
+        self._client = None
+    
+    def set_model(self, model_name: str):
+        """Set the model to use for generation."""
+        self.model_name = model_name
+        print(f"Model set to: {model_name}")
+    
+    def _build_messages(self, prompt: str, system: Optional[str] = None):
+        """Build messages array for API calls."""
+        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        return messages
+    
+    def is_loaded(self) -> bool:
+        """Check if the API client is initialized."""
+        return self._client is not None
+    
+    def generate(self, prompt: str, system: Optional[str] = None, model: Optional[str] = None, **kwargs) -> str:
+        """Generate text using the API. Must be implemented by subclasses."""
+        raise NotImplementedError("Subclasses must implement generate method")
+    
+    def get_model_info(self) -> str:
+        """Get information about the current configuration. Must be implemented by subclasses."""
+        raise NotImplementedError("Subclasses must implement get_model_info method")
+
+
+class ParrotAIHF(BaseParrotAI):
+    """HuggingFace API wrapper for text generation."""
     
     def __init__(self, provider: str = "nebius", language: str = "arabic"):
         """Initialize ParrotAIHF instance with HuggingFace API client."""
-        # Load environment variables
-        load_dotenv()
+        super().__init__(language)
         
         # Get HF token from environment
         hf_token = os.environ.get("HF_TOKEN")
         if not hf_token:
             raise ValueError("HF_TOKEN must be set in environment variables")
         
-        self.client = InferenceClient(
+        self._client = InferenceClient(
             api_key=hf_token,
             provider=cast(Any, provider)
         )
         self.provider = provider
-        self.model_name: Optional[str] = None
-        self.language = language
-        self.prompts = _load_prompts(language)
         print("HuggingFace API client initialized")
-    
-    def set_model(self, model_name: str):
-        """Set the model to use for generation."""
-        self.model_name = model_name
-        print(f"Model set to: {model_name}")
     
     def generate(
         self,
@@ -225,21 +254,13 @@ class ParrotAIHF:
         max_tokens: int = 1024,
         temperature: float = 0.1,
         top_p: float = 0.9,
-    ):
-        """
-        Generate text using HuggingFace API.
-        Returns the assistant reply only.
-        """
-        # Use provided model or fallback to instance model or default
+        **kwargs
+    ) -> str:
+        """Generate text using HuggingFace API."""
         model_to_use = model or self.model_name or "google/gemma-3-27b-it"
-        
-        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        messages = self._build_messages(prompt, system)
 
-        completion = self.client.chat.completions.create(
+        completion = self._client.chat.completions.create(
             model=model_to_use,
             messages=messages,
             max_tokens=max_tokens,
@@ -247,34 +268,25 @@ class ParrotAIHF:
             top_p=top_p,
         )
         
-        return completion.choices[0].message.content
-    
-    def is_loaded(self) -> bool:
-        """Check if the API client is initialized."""
-        return self.client is not None
+        return completion.choices[0].message.content or ""
     
     def get_model_info(self) -> str:
         """Get information about the current configuration."""
         if not self.is_loaded():
             return "API client not initialized"
         
-        info_lines = [
+        return "\n".join([
             f"Provider: {self.provider}",
             f"Current Model: {self.model_name or 'Not set (will use default)'}",
             "Type: HuggingFace API Client",
-        ]
-        return "\n".join(info_lines)
+        ])
 
 
-class ParrotAIOpenAI:
-    """OpenAI Chat Completions API wrapper with unified interface.
-
-    Relies on OPENAI_API_KEY being set. Mirrors ParrotAIHF methods: set_model, generate,
-    is_loaded, get_model_info. Language-specific system prompts loaded identically.
-    """
+class ParrotAIOpenAI(BaseParrotAI):
+    """OpenAI API wrapper for text generation."""
 
     def __init__(self, language: str = "arabic"):
-        load_dotenv()
+        super().__init__(language)
         try:
             from openai import OpenAI  # type: ignore
         except ImportError as e:  # pragma: no cover
@@ -282,27 +294,18 @@ class ParrotAIOpenAI:
         if not os.environ.get("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY must be set in environment variables")
         self._client = OpenAI()
-        self.model_name: Optional[str] = None
-        self.language = language
-        self.prompts = _load_prompts(language)
         print("OpenAI client initialized")
-
-    def set_model(self, model_name: str):
-        self.model_name = model_name
-        print(f"Model set to: {model_name}")
 
     def generate(
         self,
         prompt: str,
         system: Optional[str] = None,
         model: Optional[str] = None,
+        **kwargs
     ) -> str:
         model_to_use = model or self.model_name or "gpt-5-mini"
-        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        messages = self._build_messages(prompt, system)
+        
         resp = self._client.responses.create(
             model=model_to_use,
             input=messages
@@ -310,9 +313,6 @@ class ParrotAIOpenAI:
         answer = getattr(resp, 'output_text', "")
         
         return answer
-
-    def is_loaded(self) -> bool:
-        return self._client is not None
 
     def get_model_info(self) -> str:
         return "\n".join([
@@ -322,14 +322,11 @@ class ParrotAIOpenAI:
         ])
 
 
-class ParrotAITogether:
-    """Together AI Chat Completions API wrapper with unified interface.
-
-    Requires TOGETHER_API_KEY. Mirrors ParrotAIHF & ParrotAIOpenAI.
-    """
+class ParrotAITogether(BaseParrotAI):
+    """Together AI API wrapper for text generation."""
 
     def __init__(self, language: str = "arabic"):
-        load_dotenv()
+        super().__init__(language)
         try:
             from together import Together  # type: ignore
         except ImportError as e:  # pragma: no cover
@@ -337,27 +334,18 @@ class ParrotAITogether:
         if not os.environ.get("TOGETHER_API_KEY"):
             raise ValueError("TOGETHER_API_KEY must be set in environment variables")
         self._client = Together()
-        self.model_name: Optional[str] = None
-        self.language = language
-        self.prompts = _load_prompts(language)
         print("Together AI client initialized")
-
-    def set_model(self, model_name: str):
-        self.model_name = model_name
-        print(f"Model set to: {model_name}")
 
     def generate(
         self,
         prompt: str,
         system: Optional[str] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        **kwargs
     ) -> str:
         model_to_use = model or self.model_name or "google/gemma-3-12b-it"
-        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        messages = self._build_messages(prompt, system)
+        
         completion = self._client.chat.completions.create(
             model=model_to_use,
             messages=messages,
@@ -373,12 +361,104 @@ class ParrotAITogether:
                         return content
         return ""
 
-    def is_loaded(self) -> bool:
-        return self._client is not None
-
     def get_model_info(self) -> str:
         return "\n".join([
             "Provider: together",
             f"Current Model: {self.model_name or 'Not set (will use default)'}",
             "Type: Together AI Chat Completions Client",
+        ])
+
+
+class ParrotAIGemini(BaseParrotAI):
+    """Google Gemini API wrapper for text generation."""
+
+    def __init__(self, language: str = "arabic"):
+        super().__init__(language)
+        try:
+            from google import genai  # type: ignore
+            from google.genai import types  # type: ignore
+        except ImportError as e:  # pragma: no cover
+            raise ImportError("google-genai package not installed. Add it to requirements.txt") from e
+        if not os.environ.get("GEMINI_API_KEY"):
+            raise ValueError("GEMINI_API_KEY must be set in environment variables")
+        
+        self._client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        self._types = types
+        print("Gemini client initialized")
+
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs
+    ) -> str:
+        model_to_use = model or self.model_name or "gemini-2.5-flash"
+        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        
+        config = self._types.GenerateContentConfig()
+        if system_prompt:
+            config.system_instruction = system_prompt
+            
+        response = self._client.models.generate_content(
+            model=model_to_use,
+            contents=prompt,
+            config=config
+        )
+        
+        return response.text or ""
+
+    def get_model_info(self) -> str:
+        return "\n".join([
+            "Provider: gemini",
+            f"Current Model: {self.model_name or 'Not set (will use default)'}",
+            "Type: Google Gemini API Client",
+        ])
+
+
+class ParrotAIGrok(BaseParrotAI):
+    """xAI Grok API wrapper for text generation."""
+
+    def __init__(self, language: str = "arabic"):
+        super().__init__(language)
+        try:
+            from xai_sdk import Client  # type: ignore
+            from xai_sdk.chat import user, system  # type: ignore
+        except ImportError as e:  # pragma: no cover
+            raise ImportError("xai-sdk package not installed. Add it to requirements.txt") from e
+        if not os.environ.get("XAI_API_KEY"):
+            raise ValueError("XAI_API_KEY must be set in environment variables")
+        
+        self._client = Client(
+            api_key=os.environ.get("XAI_API_KEY"),
+            timeout=3600,
+        )
+        self._user = user
+        self._system = system
+        print("Grok client initialized")
+
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs
+    ) -> str:
+        model_to_use = model or self.model_name or "grok-3-mini"
+        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        
+        chat = self._client.chat.create(model=model_to_use)
+        
+        if system_prompt:
+            chat.append(self._system(system_prompt))
+        chat.append(self._user(prompt))
+        
+        response = chat.sample()
+        return response.content
+
+    def get_model_info(self) -> str:
+        return "\n".join([
+            "Provider: grok",
+            f"Current Model: {self.model_name or 'Not set (will use default)'}",
+            "Type: xAI Grok API Client",
         ])
