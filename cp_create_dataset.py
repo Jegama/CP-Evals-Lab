@@ -25,6 +25,7 @@ import sys
 import logging
 import argparse
 import time
+import importlib
 from datetime import datetime
 from pathlib import Path
 from tqdm import tqdm
@@ -33,7 +34,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from parrot_ai import ParrotAI, ParrotAIHF, parrot_chain
-import parrot_ai.prompts as parrot_prompts
+# Prompt module will be selected dynamically based on --language
+parrot_prompts = None  # will be set in main()
 
 
 def setup_logging(log_level='INFO'):
@@ -174,7 +176,8 @@ def create_training_dataset(
     start_index=0,
     batch_save_interval=10,
     max_retries=3,
-    logger=None
+    logger=None,
+    system_prompt: str | None = None,
 ):
     """
     Create the training dataset with enhanced error handling and progress tracking.
@@ -210,20 +213,16 @@ def create_training_dataset(
                 response = retry_with_backoff(generate_response, max_retries=max_retries, logger=logger)
                 
                 # Create training example in the format expected for fine-tuning
+                # Use provided system_prompt or fallback to prompt module MAIN_SYSTEM_PROMPT if available
+                sys_prompt_val = system_prompt
+                if sys_prompt_val is None and parrot_prompts is not None:
+                    sys_prompt_val = getattr(parrot_prompts, "MAIN_SYSTEM_PROMPT", "")
+
                 training_example = {
                     "messages": [
-                        {
-                            "role": "system",
-                            "content": parrot_prompts.MAIN_SYSTEM_PROMPT
-                        },
-                        {
-                            "role": "user",
-                            "content": data[0]["content"]  # User question
-                        },
-                        {
-                            "role": "assistant",
-                            "content": response["final_answer"]  # Final answer from chain
-                        }
+                        {"role": "system", "content": sys_prompt_val},
+                        {"role": "user", "content": data[0]["content"]},
+                        {"role": "assistant", "content": response["final_answer"]},
                     ]
                 }
                 
@@ -324,24 +323,57 @@ def retry_with_backoff(func, max_retries=3, initial_delay=1, backoff_factor=2, l
 
 
 def main():
-    """Main function to orchestrate the dataset creation process."""
+    """Main function to orchestrate the dataset creation process (language-aware)."""
     parser = argparse.ArgumentParser(description="Create training dataset using ParrotAI")
+    parser.add_argument("--language", choices=["arabic", "english"], default="arabic", help="Language namespace for prompts & default data paths")
     parser.add_argument("--model", default="google/gemma-3-12b-it", help="Model name to load")
     parser.add_argument("--use-api", action="store_true", help="Use HuggingFace API instead of local model")
     parser.add_argument("--api-provider", default="nebius", help="API provider for HuggingFace (default: nebius)")
     parser.add_argument("--output", default="data/temp_training_dataset.jsonl", help="Output file path")
-    parser.add_argument("--gotquestions", default="data/arabic/ar_gotquestions.json", help="GotQuestions JSON file path")
-    parser.add_argument("--qa-messages", default="data/arabic/ar_qa_catechism.jsonl", help="QA Messages JSONL file path")
+    parser.add_argument("--gotquestions", default=None, help="GotQuestions JSON file path (auto default by language if omitted)")
+    parser.add_argument("--qa-messages", default=None, help="QA Messages JSONL file path (auto default by language if omitted)")
     parser.add_argument("--batch-size", type=int, default=10, help="Batch save interval")
     parser.add_argument("--max-retries", type=int, default=3, help="Maximum API retry attempts for server errors")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     parser.add_argument("--resume", action="store_true", help="Resume from existing progress")
-    
+
     args = parser.parse_args()
-      # Setup logging
+
+    # Consistent language path resolution (mirrors cp_eval_llms pattern)
+    base_lang_dir = Path("data") / args.language
+    prefix = "ar_" if args.language == "arabic" else "en_"
+    # Default source file names derived from prefix for scalability (future languages just add mapping for prefix)
+    default_gotq = base_lang_dir / f"{prefix}gotquestions.json"
+    default_qa = base_lang_dir / f"{prefix}qa_catechism.jsonl"
+    # Apply defaults if not provided
+    args.gotquestions = args.gotquestions or str(default_gotq)
+    args.qa_messages = args.qa_messages or str(default_qa)
+
+    # Ensure training_datasets directory exists for outputs (if user provides relative path we place it there)
+    training_dir = base_lang_dir / "training_datasets"
+    training_dir.mkdir(parents=True, exist_ok=True)
+    if not Path(args.output).is_absolute():
+        # If user left default or any relative path, place inside training_datasets keeping filename
+        args.output = str(training_dir / Path(args.output).name)
+
+    # Choose prompt module name dynamically
+    prompt_module_name = "parrot_ai.prompts.arabic" if args.language == "arabic" else "parrot_ai.prompts.english"
+
+    # Dynamically import prompt module
+    global parrot_prompts  # noqa: PLW0603
+    try:
+        parrot_prompts = importlib.import_module(prompt_module_name)
+    except ModuleNotFoundError as e:  # pragma: no cover
+        raise ImportError(
+            f"Prompt module '{prompt_module_name}' not found. Create the file and define MAIN_SYSTEM_PROMPT et al." \
+            " (CALVIN_SYS_PROMPT, reasoning_prompt, calvin_review_prompt, final_answer_prompt)."
+        ) from e
+
+    # Setup logging
     logger = setup_logging(args.log_level)
     logger.info(f"Starting dataset creation at {datetime.now()}")
     logger.info(f"Arguments: {vars(args)}")
+    logger.info(f"Language: {args.language} | Prompts module: {prompt_module_name if parrot_prompts else 'UNAVAILABLE'}")
     
     # Validate environment for API usage
     if args.use_api:        
@@ -360,9 +392,8 @@ def main():
             logger.info("Using HuggingFace API")
             logger.info(f"API Provider: {args.api_provider}")
             logger.info(f"Model: {args.model}")
-            
             try:
-                parrot = ParrotAIHF(provider=args.api_provider)
+                parrot = ParrotAIHF(provider=args.api_provider, language=args.language)
                 parrot.set_model(args.model)
                 logger.info("HuggingFace API client initialized successfully")
                 logger.info(parrot.get_model_info())
@@ -372,7 +403,7 @@ def main():
                 sys.exit(1)
         else:
             logger.info(f"Loading local model: {args.model}")
-            parrot = ParrotAI()
+            parrot = ParrotAI(language=args.language)
             parrot.load_model(args.model)
             
             # Check if model is loaded
@@ -404,7 +435,8 @@ def main():
             start_index=start_index,
             batch_save_interval=args.batch_size,
             max_retries=args.max_retries,
-            logger=logger
+            logger=logger,
+            system_prompt=getattr(parrot_prompts, "MAIN_SYSTEM_PROMPT", "") if parrot_prompts else "",
         )
         
         logger.info(f"Dataset creation finished at {datetime.now()}")

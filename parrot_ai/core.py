@@ -16,10 +16,31 @@ ParrotAIHF (HF Inference API):
 """
 
 import os
+import importlib
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
-from parrot_ai.prompts import MAIN_SYSTEM_PROMPT
-from typing import Any, cast
+from typing import Any, cast, Optional
+
+# --- Prompt module loader -------------------------------------------------
+def _load_prompts(language: str):
+    """Import the prompt module for a given language or raise a clear error.
+
+    Required symbols the module should define:
+      - MAIN_SYSTEM_PROMPT
+      - CALVIN_SYS_PROMPT
+      - reasoning_prompt
+      - calvin_review_prompt
+      - final_answer_prompt
+    """
+    module_name = f"parrot_ai.prompts.{language}"
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as e:  # pragma: no cover
+        raise ImportError(
+            f"Prompt module '{module_name}' not found. Create 'parrot_ai/prompts/{language}.py' "
+            "with required constants: MAIN_SYSTEM_PROMPT, CALVIN_SYS_PROMPT, reasoning_prompt, "
+            "calvin_review_prompt, final_answer_prompt."
+        ) from e
 
 
 class ParrotAI:
@@ -28,11 +49,13 @@ class ParrotAI:
     The class defers importing heavy libraries until ``load_model`` is called to
     keep ``import parrot_ai`` light for users who only need API-backed flows.
     """
-    def __init__(self):
+    def __init__(self, language: str = "arabic"):
         self.model = None
         self.tokenizer = None
         self.model_name = None
         self._torch = None  # will be set after lazy import in load_model
+        self.language = language
+        self.prompts = _load_prompts(language)
 
     def load_model(self, model_name: str):
         """Load a causal LM with 4-bit quantization (requires torch + transformers).
@@ -82,7 +105,7 @@ class ParrotAI:
     def generate(
         self,
         prompt: str,
-        system: str | None = MAIN_SYSTEM_PROMPT,
+        system: Optional[str] = None,
         max_new_tokens: int = 1024,
         temperature: float = 0.1,
         top_p: float = 0.9,
@@ -94,9 +117,11 @@ class ParrotAI:
         if self.model is None or self.tokenizer is None or self._torch is None:
             raise ValueError("Model not loaded. Call load_model() first (requires torch).")
 
+        # Resolve system prompt (explicit > default from prompts module > none)
+        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
         chat = self.tokenizer.apply_chat_template(
@@ -158,7 +183,7 @@ class ParrotAI:
 class ParrotAIHF:
     """A class for using HuggingFace API for text generation."""
     
-    def __init__(self, provider: str = "nebius"):
+    def __init__(self, provider: str = "nebius", language: str = "arabic"):
         """Initialize ParrotAIHF instance with HuggingFace API client."""
         # Load environment variables
         load_dotenv()
@@ -173,8 +198,10 @@ class ParrotAIHF:
             provider=cast(Any, provider)
         )
         self.provider = provider
-        self.model_name = None
-        print(f"HuggingFace API client initialized")
+        self.model_name: Optional[str] = None
+        self.language = language
+        self.prompts = _load_prompts(language)
+        print("HuggingFace API client initialized")
     
     def set_model(self, model_name: str):
         """Set the model to use for generation."""
@@ -184,8 +211,8 @@ class ParrotAIHF:
     def generate(
         self,
         prompt: str,
-        system: str | None = MAIN_SYSTEM_PROMPT,
-        model: str | None = None,
+        system: Optional[str] = None,
+        model: Optional[str] = None,
         max_tokens: int = 1024,
         temperature: float = 0.1,
         top_p: float = 0.9,
@@ -197,9 +224,10 @@ class ParrotAIHF:
         # Use provided model or fallback to instance model or default
         model_to_use = model or self.model_name or "google/gemma-3-27b-it"
         
+        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
         completion = self.client.chat.completions.create(
@@ -226,5 +254,4 @@ class ParrotAIHF:
             f"Current Model: {self.model_name or 'Not set (will use default)'}",
             "Type: HuggingFace API Client",
         ]
-        
         return "\n".join(info_lines)

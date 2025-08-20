@@ -520,7 +520,12 @@ class EvaluationEngine:
         for i, q in enumerate(questions):
             resp = self.client.responses.create(
                 model=use_model,
-                input=q,
+                input=[
+                    {
+                        "role": "user",
+                        "content": q
+                    },
+                ],
             )
             answer = getattr(resp, 'output_text', None)
             if answer is None:
