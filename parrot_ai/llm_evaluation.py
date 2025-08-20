@@ -13,13 +13,19 @@ Backward compatibility: the previous top-level functions ``load_qa_pairs``,
 to a module-level ``default_engine`` instance so existing notebooks continue to work.
 """
 
+import json
+import importlib
 from typing import List, Tuple, Dict, Any, Optional, Iterable
-from pydantic import BaseModel
 from openai import OpenAI
 from tqdm import tqdm
 from dotenv import load_dotenv
-import importlib
-import json
+
+# Refactor note: Schema models & EvaluationEngine moved to evaluation_schemas.py and evaluation_engine.py
+from .evaluation_schemas import (
+    EvaluationResultArabic,
+    EvaluationResultEnglish,
+)
+from .core import ParrotAIOpenAI, ParrotAITogether
 
 load_dotenv()
 
@@ -114,52 +120,9 @@ def basic_language_metrics(text: str) -> Dict[str, Any]:
         'total_letters': len(letters)
     }
 
-class AdherenceModel(BaseModel):
-    Core: int
-    Secondary: int
-    Tertiary_Handling: int
-    Biblical_Basis: int
-    Consistency: int
-    Overall: int
-
-class KindnessGentlenessModel(BaseModel):
-    Core_Clarity_with_Kindness: int
-    Pastoral_Sensitivity: int
-    Secondary_Fairness: int
-    Tertiary_Neutrality: int
-    Tone: int
-    Overall: int
-
-class InterfaithSensitivityModel(BaseModel):
-    Respect_and_Handling_Objections: int
-    Objection_Acknowledgement: int
-    Evangelism: int
-    Gospel_Boldness: int 
-    Overall: int
-
-class ArabicAccuracyDetailed(BaseModel):  # Arabic only
-    Grammar_and_Syntax: int
-    Theological_Nuance: int
-    Contextual_Clarity: int
-    Consistency_of_Terms: int
-    Arabic_Purity: int
-    Penalty_Reason: Optional[str] = None
-    Overall: int
-
-class EvaluationResultArabic(BaseModel):
-    Adherence: AdherenceModel
-    Kindness_and_Gentleness: KindnessGentlenessModel
-    Interfaith_Sensitivity: InterfaithSensitivityModel
-    Arabic_Accuracy: ArabicAccuracyDetailed
-
-class EvaluationResultEnglish(BaseModel):
-    Adherence: AdherenceModel
-    Kindness_and_Gentleness: KindnessGentlenessModel
-    Interfaith_Sensitivity: InterfaithSensitivityModel
-
 DEFAULT_MODEL = "gpt-5-mini"
- # Post-processing: enforce purity & grammar caps based on heuristic percentage
 
+# Post-processing: enforce purity & grammar caps based on heuristic percentage
 def apply_purity_penalty(answer: str, result_dict: dict) -> dict:
     """Apply heuristic purity cap and related grammar adjustments."""
     lang_metrics = basic_language_metrics(answer)
@@ -230,18 +193,22 @@ def clamp_scale_scores(d: dict) -> dict:
 def enforce_knockouts(answer: str, result_dict: dict) -> dict:
     """Apply rubric knockout rules and empty-answer handling."""
     if not answer.strip():
+        # Only create base sections; Arabic_Accuracy is added elsewhere (engine) for Arabic language
         for section_key, fields in [
             ('Adherence', ['Core','Secondary','Tertiary_Handling','Biblical_Basis','Consistency','Overall']),
             ('Kindness_and_Gentleness', ['Core_Clarity_with_Kindness','Pastoral_Sensitivity','Secondary_Fairness','Tertiary_Neutrality','Tone','Overall']),
             ('Interfaith_Sensitivity', ['Respect_and_Handling_Objections','Objection_Acknowledgement','Evangelism','Gospel_Boldness','Overall']),
-            ('Arabic_Accuracy', ['Grammar_and_Syntax','Theological_Nuance','Contextual_Clarity','Consistency_of_Terms','Arabic_Purity','Overall'])
         ]:
             section = result_dict.get(section_key, {})
             for f in fields:
                 section[f] = 1
-            if section_key == 'Arabic_Accuracy':
-                section['Penalty_Reason'] = 'Empty answer'
             result_dict[section_key] = section
+        if 'Arabic_Accuracy' in result_dict:
+            arabic_section = result_dict['Arabic_Accuracy']
+            for f in ['Grammar_and_Syntax','Theological_Nuance','Contextual_Clarity','Consistency_of_Terms','Arabic_Purity','Overall']:
+                arabic_section[f] = 1
+            arabic_section['Penalty_Reason'] = 'Empty answer'
+            result_dict['Arabic_Accuracy'] = arabic_section
         return result_dict
 
     adherence = result_dict.get('Adherence', {})
@@ -293,10 +260,8 @@ def adjust_boldness(answer: str, result_dict: dict, bold_keywords: list[str], re
 class EvaluationEngine:
     """Encapsulates evaluation logic for reuse in notebooks or scripts.
 
-    Note: Temperature and max token parameters deliberately omitted for stability
-    with gpt-5 family and Together API per user request.
+    Temperature / max tokens omitted per project design for stability.
     """
-
     def __init__(
         self,
         client: Optional[OpenAI] = None,
@@ -314,12 +279,7 @@ class EvaluationEngine:
         self.language = language
         self.seed = seed
         prompt_module_name = f"parrot_ai.prompts.{language}"
-        try:
-            self.prompts = importlib.import_module(prompt_module_name)
-        except ModuleNotFoundError as e:  # pragma: no cover
-            raise ImportError(
-                f"Prompt module '{prompt_module_name}' not found. Expected evaluation constants present."
-            ) from e
+        self.prompts = importlib.import_module(prompt_module_name)
         required = ["EVAL_SYSTEM_PROMPT", "EVAL_INSTRUCTIONS"]
         missing = [r for r in required if not hasattr(self.prompts, r)]
         if missing:
@@ -335,13 +295,17 @@ class EvaluationEngine:
         """Evaluate a single (question, answer) pair returning rubric dict."""
         # Fast path for empty / whitespace-only answers: assign all 1s (lowest rubric) + penalty
         if not answer.strip():
-            result_dict = {
+            temp: dict[str, dict[str, int | str]] = {
                 'Adherence': {k: 1 for k in ['Core','Secondary','Tertiary_Handling','Biblical_Basis','Consistency','Overall']},
                 'Kindness_and_Gentleness': {k: 1 for k in ['Core_Clarity_with_Kindness','Pastoral_Sensitivity','Secondary_Fairness','Tertiary_Neutrality','Tone','Overall']},
-                'Interfaith_Sensitivity': {k: 1 for k in ['Respect_and_Handling_Objections','Objection_Acknowledgement','Evangelism','Gospel_Boldness','Overall']},
-                'Arabic_Accuracy': {**{k:1 for k in ['Grammar_and_Syntax','Theological_Nuance','Contextual_Clarity','Consistency_of_Terms','Arabic_Purity','Overall']}, 'Penalty_Reason': 'Empty answer'}
+                'Interfaith_Sensitivity': {k: 1 for k in ['Respect_and_Handling_Objections','Objection_Acknowledgement','Evangelism','Gospel_Boldness','Overall']}
             }
-            return result_dict
+            if self.language == "arabic":
+                temp['Arabic_Accuracy'] = {
+                    **{k: 1 for k in ['Grammar_and_Syntax', 'Theological_Nuance', 'Contextual_Clarity', 'Consistency_of_Terms', 'Arabic_Purity', 'Overall']},
+                    'Penalty_Reason': 'Empty answer'
+                }
+            return temp
         if self.language == "arabic":
             user_content = f"السؤال:\n{question}\n\nالإجابة:\n{answer}\n\nقيّم وفق التعليمات السابقة."
         else:
@@ -383,10 +347,10 @@ class EvaluationEngine:
         """Evaluate multiple QA pairs.
 
         Args:
-            pairs: iterable of (question, answer)
-            limit: optional max number to process
-            progress: print progress ticks
-            stop_on_error: raise immediately instead of recording error dict
+            pairs: An iterable of (question, answer) tuples to evaluate.
+            limit: Optional limit on the number of pairs to evaluate.
+            progress: Whether to show a progress bar.
+            stop_on_error: Whether to stop evaluation on the first error.
         """
         out: list[dict] = []
         processed = 0
@@ -401,16 +365,12 @@ class EvaluationEngine:
                 total = limit
             else:
                 total = min(total, limit)
-
-        use_bar = False
         bar = None
         if progress:
             try:
                 bar = tqdm(total=total, desc="Evaluating", unit="qa")
-                use_bar = True
-            except Exception:  # pragma: no cover - fallback if tqdm missing
-                use_bar = False
-
+            except Exception:  # noqa: BLE001
+                bar = None
         for i, (q, a) in enumerate(pairs):
             if limit is not None and processed >= limit:
                 break
@@ -419,14 +379,14 @@ class EvaluationEngine:
                 out.append({"index": i, "question": q, "answer": a, "evaluation": res})
             except Exception as e:  # noqa: BLE001
                 if stop_on_error:
-                    if use_bar and bar is not None:
+                    if bar:
                         bar.close()
                     raise
                 out.append({"index": i, "question": q, "error": str(e)})
             processed += 1
-            if use_bar and bar is not None:
+            if bar:
                 bar.update(1)
-        if use_bar and bar is not None:
+        if bar:
             bar.close()
         return out
 
@@ -459,50 +419,26 @@ class EvaluationEngine:
             summary['arabic_purity_distribution'] = purity_counts
         return {'results': results, 'summary': summary}
 
-    # -------------- Response generation (OpenAI Responses API) --------------
+    # -------------- Response generation (OpenAI wrapper) --------------
     def generate_responses_openai(
         self,
         questions: List[str],
         model: Optional[str] = None,
         progress: bool = True,
     ) -> List[Dict[str, Any]]:
-        """Generate answers for a list of questions via OpenAI Responses API.
-
-        Returns list of {question, answer, model, provider} dicts.
-        """
-        use_model = model or self.model
+        wrapper = ParrotAIOpenAI(language=self.language)
+        if model:
+            wrapper.set_model(model)
+        use_model = model or wrapper.model_name
         out: List[Dict[str, Any]] = []
         bar = None
         if progress:
             try:
                 bar = tqdm(total=len(questions), desc="Generating (OpenAI)", unit="q")
-            except Exception:  # pragma: no cover
+            except Exception:
                 bar = None
         for i, q in enumerate(questions):
-            resp = self.client.responses.create(
-                model=use_model,
-                input=[
-                    {
-                        "role": "user",
-                        "content": q
-                    },
-                ],
-            )
-            answer = getattr(resp, 'output_text', None)
-            if answer is None:
-                try:
-                    parts = []
-                    for item in getattr(resp, 'output', []) or []:
-                        text = getattr(item, 'content', None)
-                        if isinstance(text, list):
-                            for seg in text:
-                                if isinstance(seg, dict) and seg.get('type') == 'output_text':
-                                    parts.append(seg.get('text', ''))
-                        elif isinstance(text, str):
-                            parts.append(text)
-                    answer = "".join(parts)
-                except Exception:  # noqa: BLE001
-                    answer = ""
+            answer = wrapper.generate(prompt=q, model=use_model)
             out.append({
                 'index': i,
                 'question': q,
@@ -510,9 +446,9 @@ class EvaluationEngine:
                 'model': use_model,
                 'provider': 'openai'
             })
-            if bar is not None:
+            if bar:
                 bar.update(1)
-        if bar is not None:
+        if bar:
             bar.close()
         return out
 
@@ -526,60 +462,25 @@ class EvaluationEngine:
         questions = load_eval_questions(question_file, limit=limit)
         return self.generate_responses_openai(questions, **kwargs)
 
-    # -------------- Response generation (Together.ai) --------------
+    # -------------- Response generation (Together wrapper) --------------
     def generate_responses_together(
         self,
         questions: List[str],
-        model: str = "google/gemma-3-12b-it",
+        model: str = "google/gemma-3-27b-it",
         progress: bool = True,
     ) -> List[Dict[str, Any]]:
-        """Generate answers using Together.ai chat completions API.
-
-        Import performed lazily to avoid dependency unless used.
-        """
-        try:
-            from together import Together  # type: ignore
-        except ImportError as e:  # pragma: no cover
-            raise RuntimeError(
-                "'together' package not installed. Add it to requirements and pip install."
-            ) from e
-        client = Together()
+        wrapper = ParrotAITogether(language=self.language)
+        if model:
+            wrapper.set_model(model)
         out: List[Dict[str, Any]] = []
         bar = None
         if progress:
             try:
                 bar = tqdm(total=len(questions), desc="Generating (Together)", unit="q")
-            except Exception:  # pragma: no cover
+            except Exception:
                 bar = None
         for i, q in enumerate(questions):
-            messages = []
-            messages.append({"role": "user", "content": q})
-            resp = client.chat.completions.create(
-                model=model,
-                messages=messages,
-            )
-            # Some client versions may return an iterator (stream) or an object with .choices
-            answer = ""
-            try:
-                choices = getattr(resp, 'choices', None)
-                if choices:
-                    first = choices[0]
-                    msg = getattr(first, 'message', None)
-                    if msg:
-                        answer = getattr(msg, 'content', '') or ''
-                else:
-                    # Attempt to iterate if streaming
-                    collected = []
-                    for chunk in resp:  # type: ignore
-                        ch_choices = getattr(chunk, 'choices', None)
-                        if ch_choices:
-                            delta = getattr(ch_choices[0], 'delta', None)
-                            if delta:
-                                collected.append(getattr(delta, 'content', '') or '')
-                    if collected:
-                        answer = ''.join(collected)
-            except Exception:  # noqa: BLE001
-                answer = ""
+            answer = wrapper.generate(prompt=q, model=model)
             out.append({
                 'index': i,
                 'question': q,
@@ -587,9 +488,9 @@ class EvaluationEngine:
                 'model': model,
                 'provider': 'together'
             })
-            if bar is not None:
+            if bar:
                 bar.update(1)
-        if bar is not None:
+        if bar:
             bar.close()
         return out
 
