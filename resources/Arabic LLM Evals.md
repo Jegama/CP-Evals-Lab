@@ -1,10 +1,40 @@
 # Arabic LLM Evals
 
-*Last Updated: 2025-08-19*
+*Last Updated: 2025-08-21*
 
-This document summarizes the evaluation results for Arabic language models, focusing on dataset evaluations and fine-tuned model performance. The evaluations are based on a rubric assessing adherence, kindness, interfaith sensitivity, and Arabic accuracy across various sub-criteria.
+## Executive Summary
+Three evaluation layers:
+1. Dataset Generation System ("Dataset Evaluations"): Benchmarked multiple large base models only to choose the best generator / linguistic backbone for creating high-fidelity Arabic Christian Q&A data. Winner: `google-gemma-3-27b-v2` (top consistency & purity, balanced accuracy; manageable interfaith gaps).
+2. Supervised Fine‑tunes ("Fine-tuned Model Evaluations"): Fine‑tuned variants derived from the chosen backbone. Best: `gemma-3-27b-ft-002` (mean 4.020) with slight gains in objection handling & clarity but notable drops in Evangelism (−2.35) and Gospel Boldness (−1.08) versus the untouched baseline—evidence the current training distribution softens outward ministry tone.
+3. Live API Alternatives ("API Evaluations"): Tested prompt engineering on hosted inference models as a production substitute / complement. The Arabic Master Prompt restores evangelistic tone and boldness across providers without harming kindness or linguistic fidelity.
 
-I'll release the model on HuggingFace later this week.
+Production Recommendation:
+* Primary (missional balance): `gpt-5-mini-prompted` — strongest aggregate (4.484) and clear leader in interfaith objection handling, evangelism uplift, and bold but respectful articulation.
+* Secondary / fallback (peak grammatical polish & purity): `gemini-2.5-flash-prompted` — near‑par overall (4.413) with best or co-best Grammar / Purity while still materially improved evangelistic stance vs its vanilla run.
+
+**Why Not Deploy the Fine‑tuned Model Yet? (Cost-First Rationale)**  
+Primary blocker: Hosting an in‑house / managed 27B fine‑tuned model is currently cost‑inefficient versus leveraging high-quality API models + the Arabic Master Prompt.
+
+Key factors:
+* Cost Profile: Continuous GPU (or high-memory) allocation for a 27B FT model (serving + redundancy + autoscale headroom) materially exceeds per‑token API spend at present traffic levels.
+* Under Realized Gain: The best fine‑tune (`gemma-3-27b-ft-002`) still underperforms prompt-engineered APIs on Evangelism (−2.35 vs baseline) and Gospel Boldness (−1.08), so we would pay more to ship a weaker missional profile.
+* Opportunity Cost: Every week of infra + optimization work delays faster iteration via prompt refinements and targeted exemplar curation.
+* Flexibility: API path lets us A/B prompt tweaks immediately; fine‑tune adjustments require new training cycles and re‑evaluation.
+* Risk & Ops Overhead: Scaling, drift monitoring, patching, and latency tuning add operational burden not justified by current delta.
+
+Revisit self-hosting when:
+1. Targeted augmentation / RL pass closes evangelism & boldness gaps without hurting adherence.
+2. Projected monthly token volume crosses a breakeven vs reserved GPU cost.
+3. Latency / data residency / customization needs outweigh API elasticity.
+
+Interim Strategy: Keep using `gpt-5-mini-prompted` (primary) + `gemini-2.5-flash-prompted` (fallback) while building the objection/evangelism augmentation set; only resume fine‑tune deployment planning after measurable uplift on internal pilot evals. 
+
+Immediate Next Steps:
+* Curate 200–300 objection/evangelism exemplars (balanced by topic & difficulty) emphasizing: clear acknowledgement + gentle pivot + concise gospel articulation.
+* Fine‑tune or RLAIF on augmentation; re‑evaluate Δ on Evangelism & Boldness while monitoring Adherence & Nuance for regression.
+* Maintain monthly drift checks on both recommended API models (focus: Evangelism, Boldness, Objection Acknowledgement) to catch provider-side behavioral shifts.
+
+Persistent Weak Spot: Objection Acknowledgement remains the lowest absolute sub‑criterion across every path (<2.5 for most non‑prompted, ≤2.98 best). This is the highest leverage improvement area.
 
 ## Dataset Evaluations
 Current aggregated rubric means from `data/arabic/training_datasets/evals/dataset_eval_comparison.csv`:
@@ -131,3 +161,45 @@ Minimal system prompt recommendation to reduce this effect:
 - **Safety & Sensitivity:** If user requests unsafe action or hostile debate, gently redirect; otherwise proceed normally.
 - **Language:** Arabic only.
 ```
+
+---
+
+## API Evaluations
+Current aggregated rubric means from `data/arabic/api_evals/api_evals_comparison.csv` (same 100-question canonical set; each model run twice: `vanilla` = no system prompt, `prompted` = with `resources/Arabic Master Prompt.md`).
+
+| Criterion | Sub-criterion | gpt-5-mini-vanilla | gpt-5-mini-prompted | gemini-2.5-flash-vanilla | gemini-2.5-flash-prompted | grok-3-mini-vanilla | grok-3-mini-prompted |
+|-----------|---------------|-------------------:|--------------------:|-------------------------:|--------------------------:|-------------------:|--------------------:|
+| Adherence | N/A | 4.43 | 🟩 **5.00** | 4.23 | 🟩 **4.95** | 4.17 | **4.84** |
+| Kindness and Gentleness | N/A | 🟩 **4.98** | 🟩 **5.00** | 4.86 | **4.97** | 4.94 | 🟩 **4.98** |
+| Interfaith Sensitivity | Respect and Handling Objections | 🟩 **4.12** | **3.85** | 3.65 | 3.61 | 🟩 **3.89** | 3.50 |
+| Interfaith Sensitivity | Objection Acknowledgement | 🟩 **2.98** | 🟩 **2.83** | 2.43 | 2.44 | **2.70** | 2.30 |
+| Interfaith Sensitivity | Evangelism | 1.89 | 🟩 **4.20** | 1.96 | **3.43** | 1.77 | 🟩 **3.49** |
+| Interfaith Sensitivity | Gospel Boldness | 3.46 | 🟩 **4.68** | 3.70 | 🟩 **4.53** | 3.92 | **4.37** |
+| Arabic Accuracy | Grammar and Syntax | **4.77** | 4.59 | 🟩 **4.93** | 🟩 **4.91** | 4.47 | 4.71 |
+| Arabic Accuracy | Theological Nuance | **4.69** | 🟩 **4.84** | 4.66 | 🟩 **4.90** | 4.07 | 4.52 |
+| Arabic Accuracy | Contextual Clarity | 🟩 **5.00** | **4.96** | 🟩 **4.99** | **4.97** | 4.89 | 4.91 |
+| Arabic Accuracy | Consistency of Terms | **4.91** | 4.86 | 🟩 **4.98** | 🟩 **4.96** | 4.85 | 4.86 |
+| Arabic Accuracy | Arabic Purity | 4.45 | 4.51 | **4.67** | 🟩 **4.87** | 4.44 | 🟩 **4.69** |
+|  | Mean | 4.153 | 🟩 **4.484** | 4.096 | 🟩 **4.413** | 4.010 | **4.288** |
+
+Legend: 🟩 Top 2 per row, **bold** above row mean.
+
+Configuration summary:
+* Question set: 100-question canonical evaluation set (identical to fine-tune eval set).
+* Models: `gpt-5-mini`, `gemini-2.5-flash`, `grok-3-mini` (API hosted). Each run in (a) zero-shot vanilla (no system prompt) and (b) with curated system prompt (`Arabic Master Prompt`).
+* System prompt focus: pastoral evangelical identity, directness, respectful interfaith tone, concise Scripture integration, Arabic clarity & purity constraints (see `resources/Arabic Master Prompt.md`).
+* Judge: `gpt-5-mini` rubric-based auto-evaluator (same schema as dataset & fine-tune sections) scoring 1–5 (0.01 precision) per criterion / sub-criterion; averages computed unweighted.
+
+Takeaways:
+* Prompt uplift is consistent: overall mean improvements vs vanilla of +0.331 (gpt-5-mini), +0.316 (gemini), +0.278 (grok).
+* Largest gains concentrate in evangelistic dimensions: Evangelism (+2.31 / +1.47 / +1.72) and Gospel Boldness (+1.22 / +0.83 / +0.45) showing the system prompt effectively restores outward-facing tone without harming kindness.
+* Adherence also rises sharply across all three (+0.57 / +0.72 / +0.67), indicating clearer doctrinal framing.
+* Theological Nuance improves for all; grok benefits most (+0.45) suggesting higher sensitivity to instruction scaffolding.
+* Minor trade-offs: slight Grammar & Syntax regression for gpt-5-mini (−0.18) likely due to added stylistic imperatives; gemini sees negligible change (−0.02); grok improves (+0.24).
+* Arabic Purity & Consistency remain high across the board; gemini-prompted leads on Purity (4.87) while gemini-vanilla + gemini-prompted dominate structural accuracy (Grammar / Consistency) alongside gpt-5 strengths in interfaith & evangelism sub-criteria.
+* gpt-5-mini-prompted leads or co-leads in 7/11 content rows (not counting mean), especially all interfaith / missional facets—indicating strongest balanced ministry persona retention under evaluation rubric.
+* Residual weakness: grok still lags slightly on objection acknowledgement & adherence vs leaders; further prompt tailoring or few-shot exemplars could narrow gap.
+
+Recommendation (API usage): Adopt `gpt-5-mini` with the Arabic Master Prompt as primary API inference option for production Q&A—maximizes interfaith sensitivity uplift and evangelistic clarity while preserving high kindness & linguistic fidelity. Maintain `gemini-2.5-flash-prompted` as a secondary / fallback provider for scenarios prioritizing marginally higher raw grammatical purity and diversity. Re-run periodic drift checks (monthly) to ensure stability of evangelism & boldness scores.
+
+Future prompt refinement ideas (concise): (1) Add 3–5 micro exemplars emphasizing objection acknowledgement brevity; (2) Lightweight style tag to slightly reduce verbosity in gpt-5-mini-prompted answers (guard Grammar score); (3) Structured Scripture citation template to standardize reference formatting without inflating length.

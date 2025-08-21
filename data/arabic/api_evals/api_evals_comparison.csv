@@ -1,0 +1,13 @@
+Criterion,Sub-criterion,gpt-5-mini-vanilla,gpt-5-mini-prompted,gemini-2.5-flash-vanilla,gemini-2.5-flash-prompted,grok-3-mini-vanilla,grok-3-mini-prompted
+Adherence,N/A,4.43,5,4.23,4.95,4.17,4.84
+Kindness_and_Gentleness,N/A,4.98,5,4.86,4.97,4.94,4.98
+Interfaith_Sensitivity,Respect_and_Handling_Objections,4.12,3.85,3.65,3.61,3.89,3.5
+Interfaith_Sensitivity,Objection_Acknowledgement,2.98,2.83,2.43,2.44,2.7,2.3
+Interfaith_Sensitivity,Evangelism,1.89,4.2,1.96,3.43,1.77,3.49
+Interfaith_Sensitivity,Gospel_Boldness,3.46,4.68,3.7,4.53,3.92,4.37
+Arabic_Accuracy,Grammar_and_Syntax,4.77,4.59,4.93,4.91,4.47,4.71
+Arabic_Accuracy,Theological_Nuance,4.69,4.84,4.66,4.9,4.07,4.52
+Arabic_Accuracy,Contextual_Clarity,5,4.96,4.99,4.97,4.89,4.91
+Arabic_Accuracy,Consistency_of_Terms,4.91,4.86,4.98,4.96,4.85,4.86
+Arabic_Accuracy,Arabic_Purity,4.45,4.51,4.67,4.87,4.44,4.69
+,Average,4.153,4.484,4.096,4.413,4.01,4.288
