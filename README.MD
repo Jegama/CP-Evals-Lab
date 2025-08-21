@@ -85,13 +85,40 @@ pip install -r requirements.txt
 ```
 
 Optional performance extras (Flash Attention) may require a compatible GPU + toolchain.
+### Environment Variables (.env)
 
-### Hugging Face Token (for API mode)
-Create a `.env` file:
+Both `cp_create_dataset.py` and `cp_eval_llms.py` can read API credentials from a `.env` file (auto‑loaded if present). See the template: `.env.example`.
+
+Copy `.env.example` to `.env` and fill in any providers you will use:
 ```env
-HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxx
+HF_TOKEN=your_huggingface_token_here
+TOGETHER_API_KEY=your_together_api_key_here
+OPENAI_API_KEY=your_openai_api_key_here
+GEMINI_API_KEY=your_google_api_key_here
+XAI_API_KEY=your_xai_api_key_here
 ```
-Or set via PowerShell / CMD environment before running. Required only when using `--use-api`.
+
+Only the variables needed for the chosen providers / flags must be set (e.g., `--use-api` with an HF model requires `HF_TOKEN`; using `--provider openai` requires `OPENAI_API_KEY`, etc.).
+
+Set ad‑hoc instead of a `.env` file if preferred:
+
+PowerShell:
+```powershell
+$env:HF_TOKEN="hf_xxx"
+$env:OPENAI_API_KEY="sk-xxx"
+```
+
+CMD:
+```cmd
+set HF_TOKEN=hf_xxx
+set OPENAI_API_KEY=sk-xxx
+```
+
+Unix/macOS:
+```bash
+export HF_TOKEN=hf_xxx
+export OPENAI_API_KEY=sk-xxx
+```
 
 ---
 
