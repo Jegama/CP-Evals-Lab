@@ -25,7 +25,7 @@ from .core import ParrotAIOpenAI, ParrotAITogether, ParrotAIGemini, ParrotAIGrok
 
 load_dotenv()
 
-# --- Data loading utility (kept standalone for reuse) ---
+# --- Data loading utility ---
 def load_qa_pairs(
     jsonl_path: str,
     question_list_path: Optional[str] = "data/arabic/ar_eval_questions.txt",
@@ -71,7 +71,12 @@ def load_qa_pairs(
                 if user and assistant:
                     if question_set is None or user in question_set:
                         pairs.append((user, assistant))
-                        # preserve order as in question_filter if provided
+            elif len(messages) == 2:
+                user = messages[0].get('content') if isinstance(messages[0], dict) else None
+                assistant = messages[1].get('content') if isinstance(messages[1], dict) else None
+                if user and assistant:
+                    if question_set is None or user in question_set:
+                        pairs.append((user, assistant))
     # Re-order according to the question list if present
     if question_filter and pairs:
         order_map = {q: i for i, q in enumerate(question_filter)}

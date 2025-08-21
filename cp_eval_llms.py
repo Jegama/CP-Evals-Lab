@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Set, Optional
 from parrot_ai.llm_evaluation import (
     EvaluationEngine,
-    load_qa_pairs as base_load_qa_pairs,
+    load_qa_pairs,
     load_eval_questions,
 )
 BASE_CSV_ROWS = [
@@ -61,10 +61,6 @@ def sanitize_filename(
     name: str
 ) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", name)
-
-def load_dataset_pairs(jsonl_path: str) -> List[Tuple[str, str]]:
-    """Load all pairs from dataset (no filtering here)."""
-    return base_load_qa_pairs(jsonl_path, question_list_path=None, limit=0)
 
 def generate_dataset(
     provider: str,
@@ -377,7 +373,11 @@ def main(argv: List[str]) -> int:
 
     if args.mode == "extended":
         # Extended mode: random sample of questions directly from dataset
-        raw_pairs = load_dataset_pairs(str(dataset_path))
+        raw_pairs = load_qa_pairs(
+            str(dataset_path),
+            question_list_path=None,
+            limit=0,
+        )
         if not raw_pairs:
             raise SystemExit("Dataset appears empty or unreadable for extended mode.")
         q_to_a: Dict[str, str] = {}
@@ -396,7 +396,11 @@ def main(argv: List[str]) -> int:
         eval_questions = load_eval_questions(questions_file, limit=100)
         if not eval_questions:
             raise SystemExit("Questions file empty or unreadable for generation evaluation.")
-        raw_pairs = load_dataset_pairs(str(dataset_path))
+        raw_pairs = load_qa_pairs(
+            str(dataset_path),
+            question_list_path=None,
+            limit=0,
+        )
         q_to_a: Dict[str, str] = {}
         for q, a in raw_pairs:
             if q not in q_to_a:
@@ -419,7 +423,11 @@ def main(argv: List[str]) -> int:
         if len(eval_questions) != 100:
             raise SystemExit(f"Evaluation questions file must contain 100 questions (got {len(eval_questions)}).")
 
-        raw_pairs = load_dataset_pairs(str(dataset_path))
+        raw_pairs = load_qa_pairs(
+            str(dataset_path),
+            question_list_path=None,
+            limit=0,
+        )
         q_to_a: Dict[str, str] = {}
         for q, a in raw_pairs:
             if q in eval_set and q not in q_to_a:
