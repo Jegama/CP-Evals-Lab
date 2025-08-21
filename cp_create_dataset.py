@@ -403,7 +403,7 @@ def main():
                 sys.exit(1)
         else:
             logger.info(f"Loading local model: {args.model}")
-            parrot = ParrotAI(language=args.language)
+            parrot = LocalModelParrotAI(language=args.language)
             parrot.load_model(args.model)
             
             # Check if model is loaded
