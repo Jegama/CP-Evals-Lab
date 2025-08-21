@@ -126,8 +126,14 @@ class LocalModelParrotAI:
         if self.model is None or self.tokenizer is None or self._torch is None:
             raise ValueError("Model not loaded. Call load_model() first (requires torch).")
 
-        # Resolve system prompt (explicit > default from prompts module > none)
-        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        # Resolve system prompt: ONLY include a system message if caller explicitly supplied
+        # one (``system`` not None). If they pass an empty string we still omit it. This
+        # change prevents silent injection of a default MAIN_SYSTEM_PROMPT when the
+        # generation path (e.g. CLI without --use-system-prompt) intended to run without it.
+        if system is not None:
+            system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        else:
+            system_prompt = ""
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -207,7 +213,13 @@ class BaseParrotAI:
     
     def _build_messages(self, prompt: str, system: Optional[str] = None):
         """Build messages array for API calls."""
-        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        # Only use a system prompt if explicitly provided. If callers want the default
+        # they should pass any non-None value (e.g. prompts.MAIN_SYSTEM_PROMPT). This
+        # aligns behavior with CLI flag --use-system-prompt.
+        if system is not None:
+            system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        else:
+            system_prompt = ""
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -394,7 +406,12 @@ class ParrotAIGemini(BaseParrotAI):
         **kwargs
     ) -> str:
         model_to_use = model or self.model_name or "gemini-2.5-flash"
-        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        
+        # Only apply system prompt if explicitly supplied
+        if system is not None:
+            system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        else:
+            system_prompt = ""
         
         config = self._types.GenerateContentConfig()
         if system_prompt:
@@ -445,7 +462,10 @@ class ParrotAIGrok(BaseParrotAI):
         **kwargs
     ) -> str:
         model_to_use = model or self.model_name or "grok-3-mini"
-        system_prompt = system if system is not None else getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        if system is not None:
+            system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        else:
+            system_prompt = ""
         
         chat = self._client.chat.create(model=model_to_use)
         

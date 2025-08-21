@@ -90,29 +90,35 @@ def generate_dataset(
     
     # Generate responses using the unified method
     responses = engine.generate_responses(
-        questions, 
-        provider=provider, 
+        questions,
+        provider=provider,
         model=gen_model,
-        system=system_prompt
+        system=system_prompt if use_system_prompt else None,
     )
     
     out_path = Path(output_dataset)
     mode_flag = "a" if out_path.exists() else "w"
     print(f"[generate] {'Appending to' if mode_flag=='a' else 'Creating'} dataset: {out_path}")
     with out_path.open(mode_flag, encoding="utf-8") as f:
+        if use_system_prompt and system_prompt:
+            f.write(json.dumps({"role": "system", "content": system_prompt}, ensure_ascii=False) + "\n")
+
         for r in responses:
             if "error" in r:
                 print(f"[warning] Error generating response for question {r['index']}: {r['error']}")
                 continue
-            obj = {"messages": [
-                {"role": "system", "content": system_prompt or ""},
+            
+            msgs = [
                 {"role": "user", "content": r["question"]},
                 {"role": "assistant", "content": r["answer"]},
-            ],
-            "gen_model": gen_model,
-            "provider": r.get("provider"),
-            "timestamp": dt.now().isoformat(),
-            "use_system_prompt": use_system_prompt,
+            ]
+            
+            obj = {
+                "messages": msgs,
+                "gen_model": gen_model,
+                "provider": r.get("provider"),
+                "timestamp": dt.now().isoformat(),
+                "use_system_prompt": use_system_prompt,
             }
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
     return str(out_path)
@@ -322,10 +328,10 @@ def main(argv: List[str]) -> int:
         # Output dataset naming & placement
         if args.mode == "generate-ft_evals":
             output_dir = ft_evals_dir
-            auto_name = f"generated_ft_{args.provider}_{sanitize_filename(args.gen_model)}.jsonl"
+            auto_name = f"generated_ft_{args.provider}_{sanitize_filename(args.answers_label)}.jsonl"
         else:  # generate-api_evals
             output_dir = api_evals_dir
-            auto_name = f"generated_api_{args.provider}_{sanitize_filename(args.gen_model)}.jsonl"
+            auto_name = f"generated_api_{args.provider}_{sanitize_filename(args.answers_label)}.jsonl"
             
         output_dataset_name = args.output_dataset or auto_name
         output_dataset_path = Path(output_dataset_name)

@@ -422,6 +422,7 @@ class EvaluationEngine:
         provider: str = "openai",
         model: Optional[str] = None,
         progress: bool = True,
+        system: Optional[str] = None,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Generate responses using any supported provider.
@@ -431,6 +432,7 @@ class EvaluationEngine:
             provider: One of 'openai', 'together', 'hf', 'gemini', 'grok'
             model: Model name to use (if None, uses provider default)
             progress: Whether to show progress bar
+            system: Optional system prompt to pass to provider (None -> no system message)
             **kwargs: Additional arguments passed to the provider wrapper
         """
         # Provider mapping
@@ -478,13 +480,14 @@ class EvaluationEngine:
         
         for i, q in enumerate(questions):
             try:
-                answer = wrapper.generate(prompt=q, model=use_model)
+                answer = wrapper.generate(prompt=q, model=use_model, system=system)
                 out.append({
                     'index': i,
                     'question': q,
                     'answer': answer,
                     'model': use_model,
-                    'provider': provider
+                    'provider': provider,
+                    'system_used': bool(system)
                 })
             except Exception as e:
                 out.append({
@@ -492,7 +495,8 @@ class EvaluationEngine:
                     'question': q,
                     'error': str(e),
                     'model': use_model,
-                    'provider': provider
+                    'provider': provider,
+                    'system_used': bool(system)
                 })
             
             if bar:
