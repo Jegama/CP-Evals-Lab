@@ -9,14 +9,16 @@ function-based workflow so notebooks can simply do:
     results = engine.batch_evaluate(pairs, limit=10)
 """
 
+import os
 import json
 import importlib
-from typing import List, Tuple, Dict, Any, Optional, Iterable
+from typing import List, Tuple, Dict, Any, Optional, Iterable, cast
 from openai import OpenAI
+from google import genai
+from google.genai import types
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-# Refactor note: Schema models & EvaluationEngine moved to evaluation_schemas.py and evaluation_engine.py
 from .evaluation_schemas import (
     EvaluationResultArabic,
     EvaluationResultEnglish,
@@ -24,6 +26,8 @@ from .evaluation_schemas import (
 from .core import ParrotAIOpenAI, ParrotAITogether, ParrotAIGemini, ParrotAIGrok, ParrotAIHF
 
 load_dotenv()
+
+DEFAULT_MODEL = "gpt-5-mini"
 
 # --- Data loading utility ---
 def load_qa_pairs(
@@ -120,8 +124,6 @@ def basic_language_metrics(text: str) -> Dict[str, Any]:
         'non_arabic_char_pct': round(100 - arabic_pct, 2),
         'total_letters': len(letters)
     }
-
-DEFAULT_MODEL = "gpt-5-mini"
 
 # Post-processing: enforce purity & grammar caps based on heuristic percentage
 def apply_purity_penalty(answer: str, result_dict: dict) -> dict:
@@ -275,10 +277,17 @@ class EvaluationEngine:
         language: selects prompt module parrot_ai.prompts.<language>
         The module must define EVAL_SYSTEM_PROMPT and EVAL_INSTRUCTIONS.
         """
-        self.client = client or OpenAI()
-        self.model = model
         self.language = language
         self.seed = seed
+        self.model = model
+        if model == DEFAULT_MODEL:
+            self.client = client or OpenAI()
+        else:
+            if model.startswith("gemini"):
+                self.client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+            else:
+                self.client = client or OpenAI()
+                print(f"Warning: Using non-default model '{model}' with OpenAI client may cause issues if the model is not supported.")
         prompt_module_name = f"parrot_ai.prompts.{language}"
         self.prompts = importlib.import_module(prompt_module_name)
         required = ["EVAL_SYSTEM_PROMPT", "EVAL_INSTRUCTIONS"]
@@ -313,20 +322,59 @@ class EvaluationEngine:
             user_content = f"Question:\n{question}\n\nAnswer:\n{answer}\n\nEvaluate per the rubric instructions above."
         # Choose response model based on language
         response_model = EvaluationResultArabic if self.language == "arabic" else EvaluationResultEnglish
-        completion = self.client.chat.completions.parse(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": self.instructions},
-                {"role": "user", "content": user_content},
-            ],
-            response_format=response_model,
-            seed=self.seed,
-        )
-        parsed = completion.choices[0].message.parsed
-        if parsed is None:
-            raise ValueError("Failed to parse evaluation result from OpenAI response")
-        result_dict = json.loads(parsed.model_dump_json())
+        if self.model.startswith("gemini"):
+            # Gemini path
+            cfg = types.GenerateContentConfig(
+                seed=self.seed,
+                system_instruction=self.system_prompt,
+                response_mime_type="application/json",
+                response_schema=response_model,
+            )
+            # Concatenate instructions and the Q/A payload into one content string
+            contents = f"{self.instructions}\n\n{user_content}"
+            # Use dynamic attribute access to avoid strict type issues across SDK versions
+            client_any = cast(Any, self.client)
+            resp = client_any.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=cfg,
+            )
+            # Prefer structured parsed output; fallback to parsing JSON text
+            result_dict: dict
+            parsed_obj = getattr(resp, "parsed", None)
+            if parsed_obj is not None:
+                # If SDK returned a Pydantic model instance
+                if hasattr(parsed_obj, "model_dump"):
+                    result_dict = parsed_obj.model_dump()
+                elif isinstance(parsed_obj, dict):
+                    result_dict = parsed_obj
+                else:
+                    # Try use resp.text which should be a JSON string
+                    try:
+                        result_dict = json.loads(getattr(resp, "text", "") or "{}")
+                    except json.JSONDecodeError as e:
+                        raise ValueError(f"Failed to parse Gemini evaluation result: {e}")
+            else:
+                try:
+                    result_dict = json.loads(getattr(resp, "text", "") or "{}")
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"Failed to parse Gemini evaluation result: {e}")
+        else:
+            client_any = cast(Any, self.client)
+            completion = client_any.chat.completions.parse(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": self.instructions},
+                    {"role": "user", "content": user_content},
+                ],
+                response_format=response_model,
+                seed=self.seed,
+            )
+            parsed = completion.choices[0].message.parsed
+            if parsed is None:
+                raise ValueError("Failed to parse evaluation result from OpenAI response")
+            result_dict = json.loads(parsed.model_dump_json())
         result_dict = clamp_scale_scores(result_dict)
         # Only apply Arabic purity heuristics for Arabic language
         if self.language == "arabic" and 'Arabic_Accuracy' in result_dict:
