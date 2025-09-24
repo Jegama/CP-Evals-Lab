@@ -24,6 +24,7 @@ ParrotAIOpenAI / ParrotAITogether:
 """
 
 import os
+import json
 import importlib
 from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
@@ -333,6 +334,33 @@ class ParrotAIOpenAI(BaseParrotAI):
             "Type: OpenAI Chat Completions Client",
         ])
 
+    # Structured output using Pydantic schema
+    def generate_structured(
+        self,
+        messages: list[dict[str, str]],
+        response_model: Any,
+        model: Optional[str] = None,
+        seed: Optional[int] = None,
+    ) -> dict:
+        """Call chat.completions.parse with a Pydantic response_model and return dict."""
+        model_to_use = model or self.model_name or "gpt-5-mini"
+        client_any = cast(Any, self._client)
+        completion = client_any.chat.completions.parse(
+            model=model_to_use,
+            messages=messages,
+            response_format=response_model,
+            seed=seed,
+        )
+        parsed = completion.choices[0].message.parsed
+        if parsed is None:
+            raise ValueError("Failed to parse structured OpenAI response")
+        if hasattr(parsed, "model_dump"):
+            return parsed.model_dump()
+        if isinstance(parsed, dict):
+            return parsed
+        # Fallback to JSON string
+        return json.loads(parsed.model_dump_json())  # type: ignore[attr-defined]
+
 
 class ParrotAITogether(BaseParrotAI):
     """Together AI API wrapper for text generation."""
@@ -425,12 +453,107 @@ class ParrotAIGemini(BaseParrotAI):
         
         return response.text or ""
 
+    # --- Files API helpers ---
+    def upload_file(self, file_path: str):
+        """Upload a local file to Gemini Files API and return the file object."""
+        return self._client.files.upload(file=file_path)
+
+    def generate_with_contents(
+        self,
+        contents,
+        system: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs,
+    ) -> str:
+        """Generate using raw contents list (e.g., [instruction, file])."""
+        model_to_use = model or self.model_name or "gemini-2.5-flash"
+        if system is not None:
+            system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        else:
+            system_prompt = ""
+        config = self._types.GenerateContentConfig()
+        if system_prompt:
+            config.system_instruction = system_prompt
+        response = self._client.models.generate_content(
+            model=model_to_use,
+            contents=contents,
+            config=config,
+        )
+        return response.text or ""
+
     def get_model_info(self) -> str:
         return "\n".join([
             "Provider: gemini",
             f"Current Model: {self.model_name or 'Not set (will use default)'}",
             "Type: Google Gemini API Client",
         ])
+
+    # Structured JSON using response_schema (Pydantic model class)
+    def generate_structured(
+        self,
+        prompt: str,
+        response_schema: Any,
+        system: Optional[str] = None,
+        model: Optional[str] = None,
+        seed: Optional[int] = None,
+    ) -> dict:
+        model_to_use = model or self.model_name or "gemini-2.5-flash"
+        if system is not None:
+            system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        else:
+            system_prompt = ""
+        cfg = self._types.GenerateContentConfig(
+            seed=seed,
+            system_instruction=system_prompt or None,
+            response_mime_type="application/json",
+            response_schema=response_schema,
+        )
+        resp = self._client.models.generate_content(
+            model=model_to_use,
+            contents=prompt,
+            config=cfg,
+        )
+        # Try parsed first
+        parsed_obj = getattr(resp, "parsed", None)
+        if parsed_obj is not None:
+            if hasattr(parsed_obj, "model_dump"):
+                return parsed_obj.model_dump()
+            if isinstance(parsed_obj, dict):
+                return parsed_obj
+        # Fallback to resp.text JSON string
+        return json.loads(getattr(resp, "text", "") or "{}")
+
+    def generate_structured_with_contents(
+        self,
+        contents: Any,
+        response_schema: Any,
+        system: Optional[str] = None,
+        model: Optional[str] = None,
+        seed: Optional[int] = None,
+    ) -> dict:
+        model_to_use = model or self.model_name or "gemini-2.5-flash"
+        if system is not None:
+            system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        else:
+            system_prompt = ""
+        cfg = self._types.GenerateContentConfig(
+            seed=seed,
+            system_instruction=system_prompt or None,
+            response_mime_type="application/json",
+            response_schema=response_schema,
+        )
+        resp = self._client.models.generate_content(
+            model=model_to_use,
+            contents=contents,
+            config=cfg,
+        )
+        parsed_obj = getattr(resp, "parsed", None)
+        if parsed_obj is not None:
+            if hasattr(parsed_obj, "model_dump"):
+                return parsed_obj.model_dump()
+            if isinstance(parsed_obj, dict):
+                return parsed_obj
+        return json.loads(getattr(resp, "text", "") or "{}")
 
 
 class ParrotAIGrok(BaseParrotAI):

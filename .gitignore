@@ -15,3 +15,4 @@ temp_*.jsonl
 notes.md
 *split.jsonl
 huggingface/
+*.mp3
