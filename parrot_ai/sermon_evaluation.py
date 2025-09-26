@@ -22,6 +22,8 @@ from dotenv import load_dotenv
 from .evaluation_schemas import (
     SermonExtractionStep1,
     SermonScoringStep2,
+    SermonScoringStep2Raw,
+    AggregatedSummary,
 )
 from .core import ParrotAIOpenAI, ParrotAIGemini
 
@@ -104,7 +106,7 @@ class SermonEvaluationEngine:
         if isinstance(self.provider, ParrotAIGemini):
             data = self.provider.generate_structured(
                 prompt=f"{self.prompts.SCORING_INSTRUCTIONS}\n\n{extraction_json}",
-                response_schema=SermonScoringStep2,
+                response_schema=SermonScoringStep2Raw,
                 system=system,
                 model=self.model,
             )
@@ -114,11 +116,116 @@ class SermonEvaluationEngine:
                 {"role": "user", "content": self.prompts.SCORING_INSTRUCTIONS},
                 {"role": "user", "content": extraction_json},
             ]
-            data = self.provider.generate_structured(messages=msgs, response_model=SermonScoringStep2, model=self.model)
+            data = self.provider.generate_structured(
+                messages=msgs,
+                response_model=SermonScoringStep2Raw,
+                model=self.model
+            )
         else:
             raw = self.provider.generate(prompt, system=system, model=self.model)
             data = self._safe_json_parse(raw)
-        return SermonScoringStep2(**data)
+        raw_scoring = SermonScoringStep2Raw(**data)
+        
+        # Convert raw to full scoring object
+        scoring = SermonScoringStep2(
+            Introduction=raw_scoring.Introduction,
+            Proposition=raw_scoring.Proposition,
+            Main_Points=raw_scoring.Main_Points,
+            Exegetical_Support=raw_scoring.Exegetical_Support,
+            Application=raw_scoring.Application,
+            Illustrations=raw_scoring.Illustrations,
+            Conclusion=raw_scoring.Conclusion,
+            Strengths=raw_scoring.Strengths,
+            Growth_Areas=raw_scoring.Growth_Areas,
+            Next_Steps=raw_scoring.Next_Steps,
+            Scoring_Confidence=raw_scoring.Scoring_Confidence,
+        )
+        # Compute aggregated summary per framework and attach
+        scoring.Aggregated_Summary = self._compute_aggregates(scoring, extraction)
+        return scoring
+
+    # ----------- Aggregates computation -----------
+    @staticmethod
+    def _clamp(v: float, lo: float = 1.0, hi: float = 5.0) -> float:
+        return max(lo, min(hi, v))
+
+    @staticmethod
+    def _avg(vals):
+        lst = [v for v in vals if v is not None]
+        return sum(lst) / len(lst) if lst else 1.0
+
+    def _compute_aggregates(self, scoring: SermonScoringStep2, extraction: SermonExtractionStep1) -> AggregatedSummary:
+        # Component rollups (all on 1–5)
+        textual_fidelity = self._avg([
+            scoring.Exegetical_Support.Alignment_with_Text,
+            scoring.Exegetical_Support.Handles_Difficulties,
+            scoring.Exegetical_Support.Proof_Accuracy_and_Clarity,
+            scoring.Exegetical_Support.Context_and_Genre_Considered,
+        ])
+
+        proposition_clarity = self._avg([
+            scoring.Proposition.Principle_and_Application_Wed,
+            scoring.Proposition.Establishes_Main_Theme,
+            scoring.Proposition.Summarizes_Introduction,
+        ])
+
+        fcf_identification = float(scoring.Introduction.FCF_Introduced)
+
+        application_effectiveness = self._avg([
+            scoring.Application.Clear_and_Practical,
+            scoring.Application.Redemptive_Focus,
+            scoring.Application.Mandate_vs_Idea_Distinction,
+            scoring.Application.Passage_Supported,
+            scoring.Main_Points.Application_Quality,
+        ])
+
+        structure_cohesion = self._avg([
+            scoring.Main_Points.Proportional_and_Coexistent,
+            scoring.Conclusion.Summary,
+            scoring.Conclusion.Compelling_Exhortation,
+            scoring.Conclusion.Climax,
+            scoring.Conclusion.Pointed_End,
+        ])
+
+        illustrations = self._avg([
+            scoring.Main_Points.Illustration_Quality,
+            scoring.Illustrations.Lived_Body_Detail,
+            scoring.Illustrations.Strengthens_Points,
+            scoring.Illustrations.Proportion,
+        ])
+
+        # Weighted Overall Impact
+        overall_base = (
+            0.30 * textual_fidelity
+            + 0.20 * proposition_clarity
+            + 0.15 * application_effectiveness
+            + 0.15 * structure_cohesion
+            + 0.10 * illustrations
+            + 0.10 * fcf_identification
+        )
+
+        # Optional narrative adjustment: not supplied programmatically; default 0
+        adjustment = 0.0
+        rationale = None
+
+        overall = self._clamp(overall_base + adjustment)
+
+        # Round to two decimals per framework guidance
+        def r2(x: float) -> float:
+            return float(f"{x:.2f}")
+
+        return AggregatedSummary(
+            Textual_Fidelity=r2(textual_fidelity),
+            Proposition_Clarity=r2(proposition_clarity),
+            FCF_Identification=r2(fcf_identification),
+            Application_Effectiveness=r2(application_effectiveness),
+            Structure_Cohesion=r2(structure_cohesion),
+            Illustrations=r2(illustrations),
+            Overall_Impact_Base=r2(overall_base),
+            Overall_Impact_Adjustment=r2(adjustment),
+            Adjustment_Rationale=rationale,
+            Overall_Impact=r2(overall),
+        )
 
     # ----------- Audio support (Gemini only) -----------
     def _load_audio_cache(self) -> Dict[str, Any]:

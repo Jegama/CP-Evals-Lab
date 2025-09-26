@@ -16,3 +16,5 @@ notes.md
 *split.jsonl
 huggingface/
 *.mp3
+.cache
+gemini_files_cache.json

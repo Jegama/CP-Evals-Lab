@@ -44,8 +44,8 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    step1_path = out_dir / f"{args.label}_step1_extraction.jsonl"
-    step2_path = out_dir / f"{args.label}_step2_scoring.jsonl"
+    step1_path = out_dir / f"{args.label}_step1_extraction.json"
+    step2_path = out_dir / f"{args.label}_step2_scoring.json"
 
     engine = SermonEvaluationEngine(provider=args.provider, model=args.model)
     print(f"[init] Provider={args.provider} | Model={args.model} | Mode={args.mode}")

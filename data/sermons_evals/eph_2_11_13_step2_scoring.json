@@ -1,0 +1,90 @@
+{
+    "Introduction": {
+        "FCF_Introduced": 5,
+        "Arouses_Attention": 5,
+        "Overall": 5,
+        "Feedback": "The introduction effectively establishes rapport and thoroughly grounds the sermon in the overarching themes of Ephesians, notably 'unity in the household of God' and the indispensable connection between Christ's death/resurrection and union with Him. The FCF is expertly woven into this extensive theological setup."
+    },
+    "Proposition": {
+        "Principle_and_Application_Wed": 5,
+        "Establishes_Main_Theme": 5,
+        "Summarizes_Introduction": 5,
+        "Overall": 5,
+        "Feedback": "This is a robust and highly effective proposition. It masterfully encapsulates the FCF, the redemptive act of Christ, and the transformational outcome, setting a clear trajectory for the entire sermon."
+    },
+    "Main_Points": {
+        "Clarity": 5,
+        "Hortatory_Universal_Truths": 5,
+        "Proportional_and_Coexistent": 5,
+        "Exposition_Quality": 5,
+        "Illustration_Quality": 5,
+        "Application_Quality": 5,
+        "Overall": 5,
+        "Feedback": "The two main points are brilliantly structured around the textual contrast, allowing for a deep dive into both the gravity of human fallenness and the glory of Christ's reconciliation. The integration of exegesis, illustrations, and application within each point is seamless and highly effective."
+    },
+    "Exegetical_Support": {
+        "Alignment_with_Text": 5,
+        "Handles_Difficulties": 5,
+        "Proof_Accuracy_and_Clarity": 5,
+        "Context_and_Genre_Considered": 5,
+        "Not_Belabored": 5,
+        "Aids_Rather_Than_Impresses": 5,
+        "Overall": 5,
+        "Feedback": "The exegetical support is a significant strength, demonstrating a profound understanding of the text's historical, cultural, and theological context. It consistently clarifies meaning and informs the sermon's trajectory without overwhelming the listener."
+    },
+    "Application": {
+        "Clear_and_Practical": 5,
+        "Redemptive_Focus": 5,
+        "Mandate_vs_Idea_Distinction": 5,
+        "Passage_Supported": 5,
+        "Overall": 5,
+        "Feedback": "The applications are exceptional, consistently moving listeners from the biblical text to specific, grace-powered responses. They are practical, redemptive, and effectively bridge the gap between ancient truth and contemporary living, particularly in calling for costly, forgiving unity."
+    },
+    "Illustrations": {
+        "Lived_Body_Detail": 5,
+        "Strengthens_Points": 5,
+        "Proportion": 5,
+        "Overall": 5,
+        "Feedback": "The preacher employs a diverse and compelling range of illustrations, from personal anecdotes to historical examples and theological analogies (e.g., bicycle tires). These significantly enhance clarity and make complex ideas more accessible and memorable."
+    },
+    "Conclusion": {
+        "Summary": 4,
+        "Compelling_Exhortation": 5,
+        "Climax": 5,
+        "Pointed_End": 5,
+        "Overall": 5,
+        "Feedback": "Although a specific 'Conclusion' section wasn't provided, the final applications within the last main point powerfully summarize the sermon's central call to Spirit-empowered, forgiving unity. This functions as a compelling and pointed end, bringing the FCF to a clear, Christ-centered resolution."
+    },
+    "Strengths": [
+        "Highly precise and text-derived Fallen Condition Focus (FCF) that drives the entire sermon.",
+        "Exceptional propositional statement, clearly articulating the text's purpose, FCF, and gospel resolution.",
+        "Profound exegetical depth, expertly weaving historical, cultural, and theological context into the message.",
+        "Consistently Christ-centered, grounding all truth and application in His person and work.",
+        "Grace-powered application that is specific, practical, and fosters genuine transformation rather than mere moralism.",
+        "Effective use of varied illustrations that clarify complex theological concepts (e.g., indicative/imperative, Eastern vs. Western household).",
+        "Strong emphasis on the communal impact of sin and the call to costly, Spirit-empowered unity."
+    ],
+    "Growth_Areas": [
+        "The extensive 'Scripture Introduction' could potentially be streamlined or more overtly linked to the immediate FCF to maintain audience engagement before the specific text reading.",
+        "While the indicative/imperative framework is strong, explicitly re-connecting it to the specific 'therefore' of Ephesians 2:11 after the long setup could further solidify the structural flow.",
+        "Consider a more explicit, distinct concluding section to formally summarize and provide a final, singular call to action, even if the current ending is strong."
+    ],
+    "Next_Steps": [
+        "Continue to refine the introduction-to-text connection, perhaps by offering a concise recap of the FCF immediately before reading the specific passage.",
+        "Experiment with slightly shorter theological preambles to the main text, perhaps integrating some of the broader Ephesians themes more directly into the initial FCF surfacing.",
+        "Review the final moments of the sermon for opportunities to craft an even more distinct and memorable conclusion that echoes the proposition one last time."
+    ],
+    "Scoring_Confidence": 0.95,
+    "Aggregated_Summary": {
+        "Textual_Fidelity": 5.0,
+        "Proposition_Clarity": 5.0,
+        "FCF_Identification": 5.0,
+        "Application_Effectiveness": 5.0,
+        "Structure_Cohesion": 4.8,
+        "Illustrations": 5.0,
+        "Overall_Impact_Base": 4.97,
+        "Overall_Impact_Adjustment": 0.0,
+        "Adjustment_Rationale": null,
+        "Overall_Impact": 4.97
+    }
+}

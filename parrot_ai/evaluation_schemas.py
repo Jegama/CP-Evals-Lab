@@ -137,6 +137,22 @@ class ConclusionScores(BaseModel):
     Overall: int
     Feedback: Optional[str] = None
 
+class AggregatedSummary(BaseModel):
+    """Computed rollups per Sermon Evaluation Framework.
+
+    All values are 1–5 floats rounded to two decimals.
+    """
+    Textual_Fidelity: float
+    Proposition_Clarity: float
+    FCF_Identification: float
+    Application_Effectiveness: float
+    Structure_Cohesion: float
+    Illustrations: float
+    Overall_Impact_Base: float
+    Overall_Impact_Adjustment: float = 0.0
+    Adjustment_Rationale: Optional[str] = None
+    Overall_Impact: float
+
 class SermonScoringStep2(BaseModel):
     """Step 2 – Analytical Scoring (Synthesis & Coaching)."""
     Introduction: IntroductionScores
@@ -149,7 +165,21 @@ class SermonScoringStep2(BaseModel):
     Strengths: List[str] = Field(default_factory=list)
     Growth_Areas: List[str] = Field(default_factory=list)
     Next_Steps: List[str] = Field(default_factory=list)
-    Overall_Impact: int
+    Scoring_Confidence: float
+    Aggregated_Summary: Optional[AggregatedSummary] = None
+
+class SermonScoringStep2Raw(BaseModel):
+    """Model used for LLM output only (no aggregates)."""
+    Introduction: IntroductionScores
+    Proposition: PropositionScores
+    Main_Points: MainPointsScores
+    Exegetical_Support: ExegeticalSupportScores
+    Application: ApplicationScores
+    Illustrations: IllustrationsScores
+    Conclusion: ConclusionScores
+    Strengths: List[str] = Field(default_factory=list)
+    Growth_Areas: List[str] = Field(default_factory=list)
+    Next_Steps: List[str] = Field(default_factory=list)
     Scoring_Confidence: float
 
 __all__ = [
@@ -172,4 +202,6 @@ __all__ = [
     'IllustrationsScores',
     'ConclusionScores',
     'SermonScoringStep2',
+    'SermonScoringStep2Raw',
+    'AggregatedSummary',
 ]
