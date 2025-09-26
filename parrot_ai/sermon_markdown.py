@@ -54,21 +54,21 @@ Adjustment: {a.Overall_Impact_Adjustment}
     # Step 1: Structure
     points_md_lines = []
     for idx, p in enumerate(extraction.Body, start=1):
-        subpoints = "\n".join([f"      - {s}" for s in (p.Subpoints or [])])
-        illus = "\n".join([f"      - {s}" for s in (p.Illustrations or [])])
-        apps = "\n".join([f"      - {s}" for s in (p.Application or [])])
+        subpoints = "\n".join([f"  * {s}" for s in (p.Subpoints or [])])
+        illus = "\n".join([f"  * {s}" for s in (p.Illustrations or [])])
+        apps = "\n".join([f"  * {s}" for s in (p.Application or [])])
         points_md_lines.append(
             f"""
 ### {idx}. {p.Point}{f' ({p.Verses})' if p.Verses else ''}
 
 Summary: {p.Summary}
 
-- Subpoints:
-{subpoints or '      - (none)'}
-- Illustrations:
-{illus or '      - (none)'}
-- Applications:
-{apps or '      - (none)'}
+* Subpoints:
+{subpoints or '  * (none)'}
+* Illustrations:
+{illus or '  * (none)'}
+* Applications:
+{apps or '  * (none)'}
 
 Comments: {_fmt_opt(p.Comments)}
 
@@ -146,9 +146,9 @@ Feedback: {_fmt_opt(feedback)}
         ]
     )
 
-    strengths_md = "\n".join([f"- {s}" for s in (scoring.Strengths or [])]) or "- (none)"
-    growth_md = "\n".join([f"- {s}" for s in (scoring.Growth_Areas or [])]) or "- (none)"
-    next_md = "\n".join([f"- {s}" for s in (scoring.Next_Steps or [])]) or "- (none)"
+    strengths_md = "\n".join([f"* {s}" for s in (scoring.Strengths or [])]) or "* (none)"
+    growth_md = "\n".join([f"* {s}" for s in (scoring.Growth_Areas or [])]) or "* (none)"
+    next_md = "\n".join([f"* {s}" for s in (scoring.Next_Steps or [])]) or "* (none)"
 
     md = f"""
 # {title}
@@ -181,9 +181,9 @@ Comments: {_fmt_opt(extraction.Fallen_Condition_Focus.Comments)}
 {points_md}
 
 ### General Comments
-- Content: {_fmt_opt(extraction.General_Comments.Content_Comments)}
-- Structure: {_fmt_opt(extraction.General_Comments.Structure_Comments)}
-- Explanation: {_fmt_opt(extraction.General_Comments.Explanation_Comments)}
+* Content: {_fmt_opt(extraction.General_Comments.Content_Comments)}
+* Structure: {_fmt_opt(extraction.General_Comments.Structure_Comments)}
+* Explanation: {_fmt_opt(extraction.General_Comments.Explanation_Comments)}
 
 ## Step 2 – Analytical Scoring
 
