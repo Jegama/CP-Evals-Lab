@@ -18,9 +18,9 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Optional
 
 from parrot_ai.sermon_evaluation import SermonEvaluationEngine
+from parrot_ai.sermon_markdown import render_markdown
 
 
 def parse_args(argv=None):
@@ -32,6 +32,8 @@ def parse_args(argv=None):
     p.add_argument("--audio", help="Path to sermon audio file for --mode audio (Gemini only)")
     p.add_argument("--out-dir", default="data/sermons_evals", help="Output directory for JSONL artifacts")
     p.add_argument("--label", required=True, help="Run label to tag outputs (e.g., eph2_11-13)")
+    p.add_argument("--markdown", action="store_true", help="Also emit a human-friendly Markdown report")
+    p.add_argument("--md-file", help="Optional explicit Markdown output path; defaults to <out-dir>/<label>.md")
     return p.parse_args(argv)
 
 
@@ -73,6 +75,13 @@ def main(argv=None) -> int:
     with step2_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(step2.model_dump(), ensure_ascii=False) + "\n")
     print(f"[write] Step 2 scoring -> {step2_path}")
+
+    # Optional Markdown report
+    if args.markdown:
+        md = render_markdown(step1, step2, label=args.label, provider=args.provider, model=args.model)
+        md_path = Path(args.md_file) if args.md_file else out_dir / f"{args.label}.md"
+        md_path.write_text(md, encoding="utf-8")
+        print(f"[write] Markdown report -> {md_path}")
 
     print("[done] Sermon evaluation complete.")
     return 0

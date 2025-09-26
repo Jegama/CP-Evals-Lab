@@ -458,6 +458,12 @@ class ParrotAIGemini(BaseParrotAI):
         """Upload a local file to Gemini Files API and return the file object."""
         return self._client.files.upload(file=file_path)
 
+    def get_file(self, file_name_or_id: str):
+        """Retrieve a previously uploaded file object by name/id (e.g., 'files/abc123')."""
+        # The google-genai client expects the 'name' parameter in the format 'files/<id>'
+        name = file_name_or_id if str(file_name_or_id).startswith("files/") else f"files/{file_name_or_id}"
+        return self._client.files.get(name=name)
+
     def generate_with_contents(
         self,
         contents,

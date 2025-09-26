@@ -15,6 +15,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import threading
+import time
+import itertools
+from contextlib import contextmanager
 from typing import Any, Dict, Optional, Tuple
 
 from dotenv import load_dotenv
@@ -64,6 +68,42 @@ class SermonEvaluationEngine:
         if not self.audio_cache_path.exists():
             self.audio_cache_path.write_text("{}", encoding="utf-8")
 
+    # ----------- UX helpers -----------
+    @staticmethod
+    def _fmt_size(bytes_count: int) -> str:
+        try:
+            mb = bytes_count / (1024 * 1024)
+            if mb >= 1024:
+                gb = mb / 1024
+                return f"{gb:.2f} GB"
+            return f"{mb:.2f} MB"
+        except Exception:
+            return f"{bytes_count} B"
+
+    @staticmethod
+    @contextmanager
+    def _upload_indicator(message: str = "Working"):
+        """ASCII spinner shown while a blocking operation runs (no tqdm dependency)."""
+        stop = threading.Event()
+
+        def spin():
+            for ch in itertools.cycle("|/-\\"):
+                if stop.is_set():
+                    break
+                print(f"\r{message} {ch}", end="", flush=True)
+                time.sleep(0.1)
+            # clear line
+            print("\r", end="")
+
+        t = threading.Thread(target=spin, daemon=True)
+        t.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            t.join(timeout=0.2)
+            print(f"{message} done.")
+
     # ----------- Step 1: Extraction -----------
     def extract_structure_from_text(self, transcript: str) -> SermonExtractionStep1:
         prompt = (
@@ -72,27 +112,28 @@ class SermonEvaluationEngine:
         )
         system = self.prompts.EXTRACTION_SYSTEM_PROMPT
         # Use structured parsing if available (OpenAI/Gemini), else best-effort text JSON parse
-        if isinstance(self.provider, ParrotAIGemini):
-            data = self.provider.generate_structured(
-                prompt=f"{self.prompts.EXTRACTION_INSTRUCTIONS_TEXT}\n\n{transcript}",
-                response_schema=SermonExtractionStep1,
-                system=system,
-                model=self.model,
-            )
-        elif isinstance(self.provider, ParrotAIOpenAI):
-            msgs = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": self.prompts.EXTRACTION_INSTRUCTIONS_TEXT},
-                {"role": "user", "content": transcript},
-            ]
-            data = self.provider.generate_structured(
-                messages=msgs,
-                response_model=SermonExtractionStep1,
-                model=self.model
-            )
-        else:
-            raw = self.provider.generate(prompt, system=system, model=self.model)
-            data = self._safe_json_parse(raw)
+        with self._upload_indicator(message="Step 1: Extracting structure from transcript"):
+            if isinstance(self.provider, ParrotAIGemini):
+                data = self.provider.generate_structured(
+                    prompt=f"{self.prompts.EXTRACTION_INSTRUCTIONS_TEXT}\n\n{transcript}",
+                    response_schema=SermonExtractionStep1,
+                    system=system,
+                    model=self.model,
+                )
+            elif isinstance(self.provider, ParrotAIOpenAI):
+                msgs = [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": self.prompts.EXTRACTION_INSTRUCTIONS_TEXT},
+                    {"role": "user", "content": transcript},
+                ]
+                data = self.provider.generate_structured(
+                    messages=msgs,
+                    response_model=SermonExtractionStep1,
+                    model=self.model
+                )
+            else:
+                raw = self.provider.generate(prompt, system=system, model=self.model)
+                data = self._safe_json_parse(raw)
         return SermonExtractionStep1(**data)
 
     # ----------- Step 2: Scoring -----------
@@ -103,27 +144,28 @@ class SermonEvaluationEngine:
             "Return ONLY JSON. Step 1 JSON below:\n\n" + extraction_json
         )
         system = self.prompts.SCORING_SYSTEM_PROMPT
-        if isinstance(self.provider, ParrotAIGemini):
-            data = self.provider.generate_structured(
-                prompt=f"{self.prompts.SCORING_INSTRUCTIONS}\n\n{extraction_json}",
-                response_schema=SermonScoringStep2Raw,
-                system=system,
-                model=self.model,
-            )
-        elif isinstance(self.provider, ParrotAIOpenAI):
-            msgs = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": self.prompts.SCORING_INSTRUCTIONS},
-                {"role": "user", "content": extraction_json},
-            ]
-            data = self.provider.generate_structured(
-                messages=msgs,
-                response_model=SermonScoringStep2Raw,
-                model=self.model
-            )
-        else:
-            raw = self.provider.generate(prompt, system=system, model=self.model)
-            data = self._safe_json_parse(raw)
+        with self._upload_indicator(message="Step 2: Scoring sermon (rubric)"):
+            if isinstance(self.provider, ParrotAIGemini):
+                data = self.provider.generate_structured(
+                    prompt=f"{self.prompts.SCORING_INSTRUCTIONS}\n\n{extraction_json}",
+                    response_schema=SermonScoringStep2Raw,
+                    system=system,
+                    model=self.model,
+                )
+            elif isinstance(self.provider, ParrotAIOpenAI):
+                msgs = [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": self.prompts.SCORING_INSTRUCTIONS},
+                    {"role": "user", "content": extraction_json},
+                ]
+                data = self.provider.generate_structured(
+                    messages=msgs,
+                    response_model=SermonScoringStep2Raw,
+                    model=self.model
+                )
+            else:
+                raw = self.provider.generate(prompt, system=system, model=self.model)
+                data = self._safe_json_parse(raw)
         raw_scoring = SermonScoringStep2Raw(**data)
         
         # Convert raw to full scoring object
@@ -247,35 +289,74 @@ class SermonEvaluationEngine:
         abs_path = str(Path(local_path).expanduser().resolve())
         cache = self._load_audio_cache()
         if abs_path in cache:
-            return cache[abs_path], None
+            remote_id = cache[abs_path]
+            print(f"[sermons] [cache] Using previously uploaded file:\n  {abs_path} -> {remote_id}")
+            # Try fetching a live file object so contents include a valid file reference
+            file_obj = None
+            try:
+                if hasattr(self.provider, "get_file"):
+                    file_obj = self.provider.get_file(remote_id)  # type: ignore[attr-defined]
+            except Exception as e:
+                print(f"[sermons] [cache] Could not fetch file object for {remote_id}: {e}")
+                # As a fallback, attempt to re-upload to get a fresh object
+                try:
+                    with self._upload_indicator(message="Re-uploading to Gemini"):
+                        file_obj = self.provider.upload_file(abs_path)  # type: ignore[attr-defined]
+                    # Update cache mapping with the canonical name/id
+                    cache[abs_path] = (
+                        getattr(file_obj, "name", None)
+                        or getattr(file_obj, "uri", None)
+                        or getattr(file_obj, "id", None)
+                    )
+                    remote_id = cache[abs_path]
+                    self._save_audio_cache(cache)
+                    print(f"[sermons] [upload] Re-uploaded successfully -> {remote_id}")
+                except Exception as ee:
+                    print(f"[sermons] [upload] Re-upload failed: {ee}")
+            return remote_id, file_obj
         # Use provider's helper
-        file_obj = self.provider.upload_file(abs_path)  # type: ignore[attr-defined]
+        try:
+            size_bytes = os.path.getsize(abs_path)
+        except Exception:
+            size_bytes = -1
+        size_str = self._fmt_size(size_bytes) if size_bytes >= 0 else "unknown size"
+        print(f"[sermons] [upload] Uploading to Gemini Files API:\n  {abs_path} ({size_str})")
+        with self._upload_indicator(message="Uploading to Gemini"):
+            file_obj = self.provider.upload_file(abs_path)  # type: ignore[attr-defined]
         cache[abs_path] = (
             getattr(file_obj, "name", None)
             or getattr(file_obj, "uri", None)
             or getattr(file_obj, "id", None)
         )
         self._save_audio_cache(cache)
+        print(f"[sermons] [upload] Uploaded successfully -> {cache[abs_path]}")
         return cache[abs_path], file_obj
 
     def extract_structure_from_audio(self, audio_path: str) -> SermonExtractionStep1:
         if self.provider_name != "gemini":
             raise ValueError("Audio extraction currently supported only for Gemini")
         file_id, file_obj = self.upload_or_get_gemini_file(audio_path)
+        # Some cached entries may only return the id; try to fetch the object now
+        if file_obj is None and hasattr(self.provider, "get_file"):
+            try:
+                file_obj = self.provider.get_file(file_id)  # type: ignore[attr-defined]
+            except Exception as e:
+                print(f"[sermons] Warning: could not retrieve file object for {file_id}; proceeding with id only. {e}")
         # Construct Gemini content: instruction + file
         instruction = self.prompts.EXTRACTION_INSTRUCTIONS_AUDIO
         system = self.prompts.EXTRACTION_SYSTEM_PROMPT
         # Use two-part content: instruction and file reference
-        if isinstance(self.provider, ParrotAIGemini):
-            data = self.provider.generate_structured_with_contents(
-                contents=[instruction, file_obj or file_id],
-                response_schema=SermonExtractionStep1,
-                system=system,
-                model=self.model,
-            )
-        else:
-            raw = self.provider.generate_with_contents([instruction, file_obj or file_id], system=system, model=self.model)  # type: ignore[attr-defined]
-            data = self._safe_json_parse(raw)
+        with self._upload_indicator(message="Step 1: Extracting structure from audio"):
+            if isinstance(self.provider, ParrotAIGemini):
+                data = self.provider.generate_structured_with_contents(
+                    contents=[instruction, file_obj or file_id],
+                    response_schema=SermonExtractionStep1,
+                    system=system,
+                    model=self.model,
+                )
+            else:
+                raw = self.provider.generate_with_contents([instruction, file_obj or file_id], system=system, model=self.model)  # type: ignore[attr-defined]
+                data = self._safe_json_parse(raw)
         return SermonExtractionStep1(**data)
 
     # ----------- Helpers -----------
