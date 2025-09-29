@@ -140,7 +140,7 @@ Interpretation is complete only when the Spirit's intended *purpose* for the tex
 
 Your task is to assess the sermon structure provided in a Step 1 JSON object and produce a Step 2 scoring and feedback JSON object. You must score every sub-criterion with an integer from 1 to 5. Your output must be ONLY a single, valid JSON object with no surrounding text, commentary, or markdown."""
 
-SCORING_RUBRIC = """### A. Introduction
+SCORING_RUBRICS = """### A. Introduction
 
 Sub‑Criteria:
 1. **FCF Introduced** *(a specific fallen condition is derived from the preached text and previewed)*
@@ -181,11 +181,9 @@ Scoring Heuristics for Hortatory Universal Truths:
 * 3 – Mixed: at least one point drifts into recap/caption.
 * 1 – Majority are narrative descriptions with no transferable principle.
 
-
 ### D. Exegetical Support
 
 Sub‑Criteria:
-
 1. **Alignment with Text** *(Structure & emphasis mirror the passage's burden.)*
 2. **Handles Difficulties** *(Engages key interpretive/translation/theological tensions honestly.)*
 3. **Proof Accuracy & Clarity** *(Supports claims with sound, digestible reasoning.)*
@@ -197,7 +195,6 @@ Feedback: Depth vs brevity, clarity, balance.
 ### E. Application
 
 Sub‑Criteria:
-
 1. **Clear & Practical** *(Concrete next steps or heart postures identifiable.)*
 2. **Redemptive Focus** *(Motivated by Christ's person/work & grace, not bare willpower.)*
 3. **Mandate vs Idea Distinction** *(Explicitly marks divine commands vs pastoral wisdom suggestions.)*
@@ -207,7 +204,6 @@ Feedback: Sharpen, contextualize, motivate.
 ### F. Illustrations
 
 Sub‑Criteria:
-
 1. **Lived‑Body Detail** *(Concrete, sensory realism that builds credibility.)*
 2. **Strengthens Points** *(Illumines stated truth without hijacking focus.)*
 3. **Proportion** *(Length & frequency economical; avoids narrative domination.)*
@@ -216,16 +212,15 @@ Feedback: Trim / diversify / anchor to text.
 ### G. Conclusion
 
 Sub‑Criteria:
-
 1. **Summary** *(Concise recapitulation of proposition & main movements.)*
 2. **Compelling Exhortation** *(Specific, gospel‑rooted call to response.)*
 3. **Climax** *(Appropriate theological/pastoral crescendo, not emotional manipulation.)*
 4. **Pointed End** *(Decisive landing—no meandering fade.)*
 Feedback: Intensify, focus, seal."""
 
-SCORING_INSTRUCTIONS = f"""Based on the Step 1 sermon extraction JSON below, evaluate the sermon's quality against the following 'Sermon Evaluation Framework' rubric.
+SCORING_INSTRUCTIONS = f"""Based on the Step 1 sermon extraction JSON below, evaluate the sermon's quality against the following 'Sermon Evaluation Framework' rubrics.
 
-{SCORING_RUBRIC}
+{SCORING_RUBRICS}
 
 ### Scoring Guidance (Heuristic)
 
@@ -249,3 +244,35 @@ Key requirements (compliance checklist):
 Optional tie‑breakers (to improve calibration):
 - When unsure due to limited Step 1 detail, prefer the lower score and reduce Scoring_Confidence accordingly.
 - Avoid grade inflation; use 3 as a true midpoint (adequate), not a default."""
+
+AGG_SUMMARY_SYSTEM_PROMPT = """You are an executive homiletics coach. Combine rubric literacy with pastoral warmth to write concise, insight-rich explanations of aggregated sermon scores. Highlight concrete evidence from the scoring data, celebrate strength with specificity, and coach toward improvement without condemnation."""
+
+AGG_SUMMARY_INSTRUCTIONS = f"""Craft executive-summary feedback for the aggregated metrics using the Step 1 extraction, Step 2 scoring, and the computed aggregated summary scores provided to you.
+
+Output requirements:
+1. Return a single JSON object matching the `AggregatedSummaryFeedback` schema (fields: Textual_Fidelity, Proposition_Clarity, FCF_Identification, Application_Effectiveness, Structure_Cohesion, Illustrations, Overall_Impact).
+2. Each field must contain complete sentences. Use 1–2 sentences for every metric except `Overall_Impact`, which should use 2–3 sentences to explain the weighted outcome, referencing any adjustment.
+3. Reference the actual numerical scores (e.g., “Textual Fidelity 4.25”) and the specific sub-criteria that drove them; cite standout strengths or needed growth drawn from Step 2 inputs and, when helpful, Step 1 insights.
+4. Maintain a pastoral, constructive tone—actionable, gospel-centered, and free from generic praise or harshness.
+5. Do not include markdown, bullet lists, or commentary outside the JSON object.
+
+Metric derivations reminder:
+* Textual_Fidelity ≈ avg(Exegetical Support.Alignment with Text, Handles Difficulties, Proof Accuracy & Clarity, Context & Genre Considered)
+* Proposition_Clarity ≈ avg(Proposition.Principle + Application Wed, Establishes Main Theme, Summarizes Introduction)
+* FCF_Identification ≈ Introduction.FCF Introduced (optionally cross-checked against Step 1 FCF extraction)
+* Application_Effectiveness ≈ avg(Application.Clear & Practical, Redemptive Focus, Mandate vs Idea Distinction, Passage Supported, Main Points.Application Quality)
+* Structure_Cohesion ≈ avg(Main Points.Proportional & Coexistent, Conclusion.Summary, Conclusion.Compelling Exhortation, Conclusion.Climax, Conclusion.Pointed End)
+* Illustrations ≈ avg(Main Points.Illustration Quality, Illustrations.Lived-Body Detail, Illustrations.Strengthens Points, Illustrations.Proportion)
+* Overall_Impact – Weighted synthesis (see algorithm below).
+
+### Overall Impact Weighting Algorithm
+
+Base weighted composite (before narrative adjustment):
+* Textual_Fidelity: 0.30
+* Proposition_Clarity: 0.20
+* Application_Effectiveness: 0.15
+* Structure_Cohesion: 0.15
+* Illustrations: 0.10
+* FCF_Identification: 0.10
+
+Formula: sum(weight_i * score_i)."""

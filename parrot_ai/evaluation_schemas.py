@@ -153,6 +153,16 @@ class AggregatedSummary(BaseModel):
     Adjustment_Rationale: Optional[str] = None
     Overall_Impact: float
 
+class AggregatedSummaryFeedback(BaseModel):
+    """Feedback for the aggregated summary scores."""
+    Textual_Fidelity: Optional[str] = None
+    Proposition_Clarity: Optional[str] = None
+    FCF_Identification: Optional[str] = None
+    Application_Effectiveness: Optional[str] = None
+    Structure_Cohesion: Optional[str] = None
+    Illustrations: Optional[str] = None
+    Overall_Impact: Optional[str] = None
+
 class SermonScoringStep2(BaseModel):
     """Step 2 – Analytical Scoring (Synthesis & Coaching)."""
     Introduction: IntroductionScores
@@ -167,6 +177,7 @@ class SermonScoringStep2(BaseModel):
     Next_Steps: List[str] = Field(default_factory=list)
     Scoring_Confidence: float
     Aggregated_Summary: Optional[AggregatedSummary] = None
+    Aggregated_Summary_Feedback: Optional[AggregatedSummaryFeedback] = None
 
 class SermonScoringStep2Raw(BaseModel):
     """Model used for LLM output only (no aggregates)."""
@@ -204,4 +215,5 @@ __all__ = [
     'SermonScoringStep2',
     'SermonScoringStep2Raw',
     'AggregatedSummary',
+    'AggregatedSummaryFeedback',
 ]

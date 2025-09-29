@@ -28,6 +28,7 @@ from .evaluation_schemas import (
     SermonScoringStep2,
     SermonScoringStep2Raw,
     AggregatedSummary,
+    AggregatedSummaryFeedback,
 )
 from .core import ParrotAIOpenAI, ParrotAIGemini
 
@@ -139,15 +140,15 @@ class SermonEvaluationEngine:
     # ----------- Step 2: Scoring -----------
     def score_from_extraction(self, extraction: SermonExtractionStep1) -> SermonScoringStep2:
         extraction_json = json.dumps(extraction.model_dump(), ensure_ascii=False)
-        prompt = (
-            f"Instructions:\n{self.prompts.SCORING_INSTRUCTIONS}\n\n"
-            "Return ONLY JSON. Step 1 JSON below:\n\n" + extraction_json
+        scoring_prompt = (
+            f"{self.prompts.SCORING_INSTRUCTIONS}\n\n"
+            f"Step 1 JSON below:\n\n{extraction_json}"
         )
         system = self.prompts.SCORING_SYSTEM_PROMPT
         with self._upload_indicator(message="Step 2: Scoring sermon (rubric)"):
             if isinstance(self.provider, ParrotAIGemini):
                 data = self.provider.generate_structured(
-                    prompt=f"{self.prompts.SCORING_INSTRUCTIONS}\n\n{extraction_json}",
+                    prompt=scoring_prompt,
                     response_schema=SermonScoringStep2Raw,
                     system=system,
                     model=self.model,
@@ -155,8 +156,7 @@ class SermonEvaluationEngine:
             elif isinstance(self.provider, ParrotAIOpenAI):
                 msgs = [
                     {"role": "system", "content": system},
-                    {"role": "user", "content": self.prompts.SCORING_INSTRUCTIONS},
-                    {"role": "user", "content": extraction_json},
+                    {"role": "user", "content": scoring_prompt},
                 ]
                 data = self.provider.generate_structured(
                     messages=msgs,
@@ -164,7 +164,7 @@ class SermonEvaluationEngine:
                     model=self.model
                 )
             else:
-                raw = self.provider.generate(prompt, system=system, model=self.model)
+                raw = self.provider.generate(scoring_prompt, system=system, model=self.model)
                 data = self._safe_json_parse(raw)
         raw_scoring = SermonScoringStep2Raw(**data)
         
@@ -184,6 +184,53 @@ class SermonEvaluationEngine:
         )
         # Compute aggregated summary per framework and attach
         scoring.Aggregated_Summary = self._compute_aggregates(scoring, extraction)
+
+        # Generate feedback and explanations for the aggregate scores
+        step2_dump = scoring.model_dump(exclude={"Aggregated_Summary_Feedback"})
+        agg_prompt = (
+            f"{self.prompts.AGG_SUMMARY_INSTRUCTIONS}\n\n"
+            f"Step 1 JSON:\n{extraction_json}\n\n"
+            f"Step 2 JSON:\n{json.dumps(step2_dump, ensure_ascii=False)}\n\n"
+            f"Aggregated Summary JSON:\n"
+            f"{json.dumps(scoring.Aggregated_Summary.model_dump() if scoring.Aggregated_Summary else {}, ensure_ascii=False)}"
+        )
+
+        agg_feedback_data = None
+        try:
+            with self._upload_indicator(message="Summarizing aggregate insights"):
+                if isinstance(self.provider, ParrotAIGemini):
+                    agg_feedback_data = self.provider.generate_structured(
+                        prompt=agg_prompt,
+                        response_schema=AggregatedSummaryFeedback,
+                        system=self.prompts.AGG_SUMMARY_SYSTEM_PROMPT,
+                        model=self.model,
+                    )
+                elif isinstance(self.provider, ParrotAIOpenAI):
+                    msgs = [
+                        {"role": "system", "content": self.prompts.AGG_SUMMARY_SYSTEM_PROMPT},
+                        {"role": "user", "content": agg_prompt},
+                    ]
+                    agg_feedback_data = self.provider.generate_structured(
+                        messages=msgs,
+                        response_model=AggregatedSummaryFeedback,
+                        model=self.model,
+                    )
+                else:
+                    raw = self.provider.generate(
+                        agg_prompt,
+                        system=self.prompts.AGG_SUMMARY_SYSTEM_PROMPT,
+                        model=self.model,
+                    )
+                    agg_feedback_data = self._safe_json_parse(raw)
+        except Exception as exc:
+            print(f"[sermons] Warning: could not generate aggregate feedback: {exc}")
+
+        if agg_feedback_data:
+            try:
+                scoring.Aggregated_Summary_Feedback = AggregatedSummaryFeedback(**agg_feedback_data)
+            except Exception as exc:
+                print(f"[sermons] Warning: could not parse aggregate feedback JSON: {exc}")
+
         return scoring
 
     # ----------- Aggregates computation -----------

@@ -33,19 +33,32 @@ def render_markdown(
     agg_md = ""
     if scoring.Aggregated_Summary is not None:
         a = scoring.Aggregated_Summary
+        fb = getattr(scoring, "Aggregated_Summary_Feedback", None)
+
+        def _agg_fb(field: str) -> str:
+            if fb is None:
+                return "-"
+            value = getattr(fb, field, None)
+            return (value or "-").replace("\n", " ")
+
+        raw_overall_fb = None if fb is None else getattr(fb, "Overall_Impact", None)
+        overall_fb = (raw_overall_fb or "-").strip()
         agg_md = f"""
 ## Aggregated Summary
 
-| Metric | Score |
-|---|---:|
-| Textual Fidelity | {a.Textual_Fidelity} |
-| Proposition Clarity | {a.Proposition_Clarity} |
-| FCF Identification | {a.FCF_Identification} |
-| Application Effectiveness | {a.Application_Effectiveness} |
-| Structure Cohesion | {a.Structure_Cohesion} |
-| Illustrations | {a.Illustrations} |
+| Metric | Score | Feedback |
+|---|---:|---|
+| Textual Fidelity | {a.Textual_Fidelity} | {_agg_fb('Textual_Fidelity')} |
+| Proposition Clarity | {a.Proposition_Clarity} | {_agg_fb('Proposition_Clarity')} |
+| FCF Identification | {a.FCF_Identification} | {_agg_fb('FCF_Identification')} |
+| Application Effectiveness | {a.Application_Effectiveness} | {_agg_fb('Application_Effectiveness')} |
+| Structure Cohesion | {a.Structure_Cohesion} | {_agg_fb('Structure_Cohesion')} |
+| Illustrations | {a.Illustrations} | {_agg_fb('Illustrations')} |
 
-**Overall Impact (weighted): {a.Overall_Impact}**  
+**Overall Impact (weighted): {a.Overall_Impact}**
+
+{overall_fb}
+
 Base: {a.Overall_Impact_Base}  
 Adjustment: {a.Overall_Impact_Adjustment}  
 {('Rationale: ' + a.Adjustment_Rationale) if a.Adjustment_Rationale else ''}
