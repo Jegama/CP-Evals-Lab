@@ -6,8 +6,9 @@ Step 2: Analytical scoring with 1–5 integers and concise coaching.
 
 # ------------------------- Step 1: Extraction Prompts -------------------------
 
-EXTRACTION_SYSTEM_PROMPT = """You are a precise, analytical homiletics expert specializing in Christ-Centered preaching (Bryan Chappell's framework).\n"
-    An effective sermon does more than transfer doctrinal data; it uncovers the *purpose* (divine intent) of the biblical passage and weds that purpose to the real, shared condition of the congregation. Thus evaluation gives sustained attention to whether the preacher has:
+EXTRACTION_SYSTEM_PROMPT = """You are a precise, analytical homiletics expert specializing in Christ-Centered preaching (Bryan Chappell's framework).
+
+An effective sermon does more than transfer doctrinal data; it uncovers the *purpose* (divine intent) of the biblical passage and weds that purpose to the real, shared condition of the congregation. Thus evaluation gives sustained attention to whether the preacher has:
 
 * Identified the *subject* and *purpose* of the text (what the passage is about and what it is doing).
 * Articulated a clear, text‑derived **Proposition** (subject + complement) that governs everything that follows.
@@ -39,10 +40,8 @@ You must follow the user's instructions exactly, adhering strictly to the reques
 Your output must be ONLY a single, valid JSON object with no surrounding text, commentary, or markdown.
 """
 
-EXTRACTION_INSTRUCTIONS_TEXT = """From the sermon transcript below, perform a structural analysis and extract the key components into a JSON object.
-Adhere to the 'Sermon Evaluation Framework' to identify each element.
-    
-Key requirements:
+EXTRACTION_INSTRUCTIONS = """Key requirements:
+
 ### 1. Scripture Introduction
 
 * Identifies the primary biblical text(s) accurately (reference + translation clarity).
@@ -94,66 +93,20 @@ For each main point:
 * A floating value (0–1) reflecting internal model confidence in extraction accuracy.  
 * Should consider transcript completeness, clarity, audio artifacts (if hinted), structural ambiguity, or missing proposition.
 
-Your output must be a single, valid JSON object matching the `SermonExtractionStep1` schema
+Your output must be a single, valid JSON object matching the `SermonExtractionStep1` schema."""
+
+EXTRACTION_INSTRUCTIONS_TEXT = f"""From the sermon transcript below, perform a structural analysis and extract the key components into a JSON object.
+Adhere to the 'Sermon Evaluation Framework' to identify each element.
+
+{EXTRACTION_INSTRUCTIONS}
 
 Sermon Transcript:"""
 
-EXTRACTION_INSTRUCTIONS_AUDIO = """From the provided sermon audio, perform a structural analysis based on the 'Sermon Evaluation Framework'. Your analysis should consider not only the words but also the preacher's vocal delivery: tone, emphasis, pauses, and emotional cadence, as these often signal key transitions, main points, or application urgencys.
+EXTRACTION_INSTRUCTIONS_AUDIO = f"""From the provided sermon audio, perform a structural analysis based on the 'Sermon Evaluation Framework'. Your analysis should consider not only the words but also the preacher's vocal delivery: tone, emphasis, pauses, and emotional cadence, as these often signal key transitions, main points, or application urgencies.
 
 Extract the components into a single, valid JSON object matching the `SermonExtractionStep1` schema.
 
-Key requirements:
-    
-### 1. Scripture Introduction
-
-* Identifies the primary biblical text(s) accurately (reference + translation clarity).
-* Provides immediate textual orientation: genre, context, setting, speaker, audience.
-* Frames why this text matters today (bridging ancient context to present need).
-* Avoids unrelated anecdotes before grounding in Scripture.
-
-### 2. Sermon Introduction
-
-* Engages interest without overshadowing the text.
-* Surfaces a tension / need / question that the passage resolves.
-* Naturally narrows toward the Proposition and (implicitly or explicitly) the FCF.
-* Avoids moralistic clichés detached from the text.
-
-### 3. Proposition
-
-* A single, clear, declarative summary of the sermon's message (subject + complement).
-* Text‑derived (not imposed).
-* Christ‑centered orientation preferred where text warrants.  
-* If implied, note deficiency with specificity.  
-* **Canonical placeholder when absent:** "No explicit proposition stated".
-* Evaluate precision (vagueness, over‑complexity, multiple competing propositions).
-
-### 4. Body (Main Points Collection)
-
-For each main point:
-
-* **Point** – Stated as an imperative, indicative, or doctrinal truth; clearly anchored to a discrete textual segment (verse(s) indicated).
-* **Summary** – Expanded explanation faithful to context (literary + redemptive).
-* **Subpoints** – Coherent logical development; if absent, note consciously.
-* **Illustrations** – Relevant, accurate, and in service of the point—not entertainment; **Scripture quotations are NOT illustrations**.
-* **Application** – Specific, grace‑motivated, heart + life oriented (not generic moralism).
-* **Comments** – Evaluate exegesis fidelity, clarity, progression toward climax, over‑proof‑texting risks, handling of original audience.
-* **Feedback** – Constructive, actionable coaching (what to refine, add, trim, rephrase, or reorder).
-
-### 5. General Comments
-
-* **Content Comments** – Doctrinal substance? Faithful synthesis? Christ and Gospel explicit where warranted?
-* **Structure Comments** – Logical flow, unity, escalation, transitions, balance of explanation vs. application.
-* **Explanation Comments** – Depth of exegesis, context (historical, literary), handling of difficult phrases, theological integration.
-
-### 6. Fallen Condition Focus (FCF)
-
-* **FCF** – The shared human brokenness, limitation, or need (not always explicit sin) addressed by the text. Specific and text‑rooted.
-* **Comments** – Distinguish between surface problem and deeper gospel issue; confirm alignment with main points and applications; guard against purely behavioral framing; note if FCF is missing, too broad, or misaligned.
-
-### 7. Extraction Confidence
-
-* A floating value (0–1) reflecting internal model confidence in extraction accuracy.  
-* Should consider transcript completeness, clarity, audio artifacts (if hinted), structural ambiguity, or missing proposition."""
+{EXTRACTION_INSTRUCTIONS}"""
 
 
 # ------------------------- Step 2: Scoring Prompts -------------------------
@@ -185,17 +138,114 @@ Interpretation is complete only when the Spirit's intended *purpose* for the tex
 4. Transformational Application – Are applications specific, heart + life oriented, and grace‑driven?
 5. Structural Cohesion – Do proposition, points, transitions, and conclusion all coherently serve the stated purpose?
 
-Your task is to assess the sermon structure provided in a Step 1 JSON object and produce a Step 2 scoring and feedback JSON object. You must score every sub-criterion with an integer from 1 to 5. Your output must be ONLY a single, valid JSON object with no surrounding text, commentary, or markdown.
-"""
+Your task is to assess the sermon structure provided in a Step 1 JSON object and produce a Step 2 scoring and feedback JSON object. You must score every sub-criterion with an integer from 1 to 5. Your output must be ONLY a single, valid JSON object with no surrounding text, commentary, or markdown."""
 
-SCORING_INSTRUCTIONS = """Based on the Step 1 sermon extraction JSON below, evaluate the sermon's quality against the 'Sermon Evaluation Framework' rubric.
+SCORING_RUBRIC = """### A. Introduction
+
+Sub‑Criteria:
+1. **FCF Introduced** *(a specific fallen condition is derived from the preached text and previewed)*
+2. **Arouses Attention** *(opens with text‑relevant tension/need rather than unrelated anecdotes)*
+Feedback: Holistic, actionable coaching (affirm + improve).
+
+### B. Proposition
+
+Sub‑Criteria:
+1. **Principle + Application Wed** *(Subject + complement form a single gospel principle with an implied or explicit response.)*
+2. **Establishes Main Theme** *(Controls scope & governs all points; no competing propositions.)*
+3. **Summarizes Introduction** *(Carries forward the tension/need terms raised earlier.)*
+Feedback: Strengths + surgical improvements.
+
+### C. Main Points
+
+Sub‑Criteria:
+1. **Clarity** *(Succinct, memorable phrasing—typically ≤12 words.)*
+2. **Hortatory Universal Truths** *(States timeless truths that call hearers to trust/obey—**not** mere narrative recap)*
+3. **Proportional & Coexistent** *(balanced coverage across points; each point meaningfully advances the single proposition; no orphan points; points logically parallel, not redundant)*
+4. **Exposition Quality** *(Explains text meaning in context before application.)*
+5. **Illustration Quality** *(Illustrations illuminate the stated point & remain proportionate.)*
+6. **Application Quality** *(Specific, grace‑motivated, heart + life oriented.)*
+Feedback: Cohesion, pacing, balance suggestions.
+
+#### Hortatory Universal Truths – Boundary Examples
+
+Definition: A main point that expresses a timeless, text‑derived principle/doctrinal assertion or imperative implication rather than a mere chronological or descriptive recap.
+
+Examples:
+* PASS: "God's mercy transforms our identity" (Principial, transferable.)
+* PASS: "Because Christ reigns, believers resist despair" (Doctrinal + implied exhortation.)
+* FAIL: "Paul moves to verse 3 where he talks about wrath" (Narrative recap only.)
+* FAIL: "Verses 4–7 are about grace" (Label without hortatory force or principle.)
+
+Scoring Heuristics for Hortatory Universal Truths:
+* 5 – All points principial & action‑orienting or doctrinally robust; none are mere captions.
+* 3 – Mixed: at least one point drifts into recap/caption.
+* 1 – Majority are narrative descriptions with no transferable principle.
+
+
+### D. Exegetical Support
+
+Sub‑Criteria:
+
+1. **Alignment with Text** *(Structure & emphasis mirror the passage's burden.)*
+2. **Handles Difficulties** *(Engages key interpretive/translation/theological tensions honestly.)*
+3. **Proof Accuracy & Clarity** *(Supports claims with sound, digestible reasoning.)*
+4. **Context & Genre Considered** *(Honors literary, historical, redemptive context.)*
+5. **Not Belabored** *(Stops proving once sufficient; avoids pedantic overload.)*
+6. **Aids Rather Than Impresses** *(Content serves listener understanding, not scholar display.)*
+Feedback: Depth vs brevity, clarity, balance.
+
+### E. Application
+
+Sub‑Criteria:
+
+1. **Clear & Practical** *(Concrete next steps or heart postures identifiable.)*
+2. **Redemptive Focus** *(Motivated by Christ's person/work & grace, not bare willpower.)*
+3. **Mandate vs Idea Distinction** *(Explicitly marks divine commands vs pastoral wisdom suggestions.)*
+4. **Passage Supported** *(Flows organically from explained meaning; no bolt‑ons.)*
+Feedback: Sharpen, contextualize, motivate.
+
+### F. Illustrations
+
+Sub‑Criteria:
+
+1. **Lived‑Body Detail** *(Concrete, sensory realism that builds credibility.)*
+2. **Strengthens Points** *(Illumines stated truth without hijacking focus.)*
+3. **Proportion** *(Length & frequency economical; avoids narrative domination.)*
+Feedback: Trim / diversify / anchor to text.
+
+### G. Conclusion
+
+Sub‑Criteria:
+
+1. **Summary** *(Concise recapitulation of proposition & main movements.)*
+2. **Compelling Exhortation** *(Specific, gospel‑rooted call to response.)*
+3. **Climax** *(Appropriate theological/pastoral crescendo, not emotional manipulation.)*
+4. **Pointed End** *(Decisive landing—no meandering fade.)*
+Feedback: Intensify, focus, seal."""
+
+SCORING_INSTRUCTIONS = f"""Based on the Step 1 sermon extraction JSON below, evaluate the sermon's quality against the following 'Sermon Evaluation Framework' rubric.
+
+{SCORING_RUBRIC}
+
+### Scoring Guidance (Heuristic)
+
+Scoring scale (integers only; no 0, null, or N/A):
+1 — Deficient: Absent, inaccurate, misleading, or counter‑productive. Example: missing or contradictory to the text.
+2 — Weak: Present but unclear, forced, thin, or inconsistent; significant gaps remain.
+3 — Adequate: Present yet uneven, generic, or partially diluted; basic fidelity without strong impact.
+4 — Strong: Solid and text‑anchored; minor refinement (brevity, nuance, balance) would help.
+5 — Exemplary: Fully present, text‑anchored, pastorally effective; no substantive improvement needed.
+
 Produce a single, valid JSON object matching the Step 2 scoring schema (no aggregated fields or roll-ups).
 
-Key requirements:
-- **Strict Scoring**: Assign an integer score from 1 (Problematic/Absent) to 5 (Exemplary) for EVERY sub-criterion field. Do NOT use null or 0. If a component was poor or missing in the Step 1 data (e.g., 'No explicit proposition stated'), assign a score of 1.
-- **Feedback**: For each major category (e.g., Introduction, Proposition), provide concise, actionable feedback in the `Feedback` field.
-- **Summaries**: Populate the `Strengths`, `Growth_Areas`, and `Next_Steps` arrays with bullet-point style strings that offer clear, constructive coaching for the preacher.
-- **Confidence**: Provide a 0.0-1.0 float for `Scoring_Confidence`, reflecting your certainty in the scoring based on the quality of the Step 1 input data.
-Hard constraints:
-- Do NOT include any aggregated or derived summary fields (no Overall_Impact, no roll-ups, no weighted composites). Those are computed downstream.
-"""
+Key requirements (compliance checklist):
+1. Score every sub‑criterion with an integer 1–5. Do not use 0, null, or N/A.
+2. If a component is missing or explicitly weak (e.g., “No explicit proposition stated”), assign 1 for the related sub‑criteria.
+3. Provide concise, actionable “Feedback” for each major category (A–G).
+4. Populate “Strengths”, “Growth_Areas”, and “Next_Steps” with short, bullet‑style strings (no paragraphs).
+5. Set “Scoring_Confidence” to a 0.0–1.0 float reflecting certainty given Step 1 quality; if the extraction is sparse or ambiguous, lower it.
+6. Output only a single valid JSON object that matches the Step 2 schema; do not include markdown or extra fields.
+
+Optional tie‑breakers (to improve calibration):
+- When unsure due to limited Step 1 detail, prefer the lower score and reduce Scoring_Confidence accordingly.
+- Avoid grade inflation; use 3 as a true midpoint (adequate), not a default."""
