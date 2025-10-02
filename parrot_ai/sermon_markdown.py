@@ -58,10 +58,6 @@ def render_markdown(
 **Overall Impact (weighted): {a.Overall_Impact}**
 
 {overall_fb}
-
-Base: {a.Overall_Impact_Base}  
-Adjustment: {a.Overall_Impact_Adjustment}  
-{('Rationale: ' + a.Adjustment_Rationale) if a.Adjustment_Rationale else ''}
 """.strip()
 
     # Step 1: Structure
@@ -167,7 +163,6 @@ Feedback: {_fmt_opt(feedback)}
 # {title}
 
 Generated: {ts}  
-Provider: {provider or '-'}  
 Model: {model or '-'}  
 Extraction Confidence: {extraction.Extraction_Confidence}  
 Scoring Confidence: {scoring.Scoring_Confidence}

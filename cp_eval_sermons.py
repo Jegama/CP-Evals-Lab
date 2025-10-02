@@ -37,9 +37,9 @@ def parse_args(argv=None):
     p.add_argument("--audio", help="Path to sermon audio file for --mode audio (Gemini only)")
     p.add_argument("--out-dir", default="data/sermons_evals", help="Output directory for JSONL artifacts")
     p.add_argument("--label", required=True, help="Run label to tag outputs (e.g., eph2_11-13)")
-    p.add_argument("--markdown", action="store_true", help="Also emit a human-friendly Markdown report")
     p.add_argument("--md-file", help="Optional explicit Markdown output path; defaults to <out-dir>/<label>.md")
     p.add_argument("--preacher", required=True, help="Name or identifier for the preacher being evaluated (stored in summary CSV)")
+    p.add_argument("--markdown", action="store_true", help="Also emit a human-friendly Markdown report")
     return p.parse_args(argv)
 
 def append_aggregated_summary_csv(
@@ -48,7 +48,6 @@ def append_aggregated_summary_csv(
     preacher: str,
     label: str,
     scoring: SermonScoringStep2,
-    provider: str,
     model: str,
 ) -> None:
     summary = getattr(scoring, "Aggregated_Summary", None)
@@ -58,37 +57,29 @@ def append_aggregated_summary_csv(
 
     fieldnames = [
         "timestamp",
-        "preacher",
         "label",
-        "provider",
         "model",
+        "preacher",
         "Textual_Fidelity",
         "Proposition_Clarity",
         "FCF_Identification",
         "Application_Effectiveness",
         "Structure_Cohesion",
         "Illustrations",
-        "Overall_Impact_Base",
-        "Overall_Impact_Adjustment",
-        "Adjustment_Rationale",
         "Overall_Impact",
     ]
 
     row = {
         "timestamp": datetime.now().isoformat(),
-        "preacher": preacher.replace("_", " "),
         "label": label,
-        "provider": provider,
         "model": model,
+        "preacher": preacher.replace("_", " "),
         "Textual_Fidelity": summary.Textual_Fidelity,
         "Proposition_Clarity": summary.Proposition_Clarity,
         "FCF_Identification": summary.FCF_Identification,
         "Application_Effectiveness": summary.Application_Effectiveness,
         "Structure_Cohesion": summary.Structure_Cohesion,
         "Illustrations": summary.Illustrations,
-        "Overall_Impact_Base": summary.Overall_Impact_Base,
-        "Overall_Impact_Adjustment": summary.Overall_Impact_Adjustment,
-        "Adjustment_Rationale": summary.Adjustment_Rationale or "",
         "Overall_Impact": summary.Overall_Impact,
     }
 
@@ -149,13 +140,12 @@ def main(argv=None) -> int:
         preacher=args.preacher,
         label=args.label,
         scoring=step2,
-        provider=args.provider,
         model=args.model,
     )
 
     # Optional Markdown report
     if args.markdown:
-        md = render_markdown(step1, step2, label=args.label, provider=args.provider, model=args.model)
+        md = render_markdown(step1, step2, label=args.label, model=args.model)
         md_path = Path(args.md_file) if args.md_file else out_dir / f"{args.label}.md"
         md_path.write_text(md, encoding="utf-8")
         print(f"[write] Markdown report -> {md_path}")

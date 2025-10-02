@@ -292,12 +292,7 @@ class SermonEvaluationEngine:
             + 0.10 * illustrations
             + 0.10 * fcf_identification
         )
-
-        # Optional narrative adjustment: not supplied programmatically; default 0
-        adjustment = 0.0
-        rationale = None
-
-        overall = self._clamp(overall_base + adjustment)
+        overall = self._clamp(overall_base)
 
         # Round to two decimals per framework guidance
         def r2(x: float) -> float:
@@ -311,8 +306,6 @@ class SermonEvaluationEngine:
             Structure_Cohesion=r2(structure_cohesion),
             Illustrations=r2(illustrations),
             Overall_Impact_Base=r2(overall_base),
-            Overall_Impact_Adjustment=r2(adjustment),
-            Adjustment_Rationale=rationale,
             Overall_Impact=r2(overall),
         )
 

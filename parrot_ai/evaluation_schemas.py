@@ -149,8 +149,6 @@ class AggregatedSummary(BaseModel):
     Structure_Cohesion: float
     Illustrations: float
     Overall_Impact_Base: float
-    Overall_Impact_Adjustment: float = 0.0
-    Adjustment_Rationale: Optional[str] = None
     Overall_Impact: float
 
 class AggregatedSummaryFeedback(BaseModel):
