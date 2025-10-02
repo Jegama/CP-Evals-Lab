@@ -96,18 +96,24 @@ For each main point:
 * **Comments** – Evaluate exegesis fidelity, clarity, progression toward climax, over‑proof‑texting risks, handling of original audience.
 * **Feedback** – Constructive, actionable coaching (what to refine, add, trim, rephrase, or reorder).
 
-### 5. General Comments
+### 5. Conclusion
+
+* Capture the conclusion in a single paragraph that mirrors the preacher's actual landing—include the stated recap, exhortation, gospel emphasis, and tone as delivered (do not invent missing elements).
+* Highlight whether the conclusion provided a compelling exhortation, climax, and pointed ending within that paragraph; if certain elements were absent, say so plainly inside the paragraph rather than fabricating them.
+* **Canonical placeholder when absent:** If the preacher offered no discernible conclusion, set the field to "No explicit conclusion provided".
+
+### 6. General Comments
 
 * **Content Comments** – Doctrinal substance? Faithful synthesis? Christ and Gospel explicit where warranted?
 * **Structure Comments** – Logical flow, unity, escalation, transitions, balance of explanation vs. application.
 * **Explanation Comments** – Depth of exegesis, context (historical, literary), handling of difficult phrases, theological integration.
 
-### 6. Fallen Condition Focus (FCF)
+### 7. Fallen Condition Focus (FCF)
 
 * **FCF** – The shared human brokenness, limitation, or need (not always explicit sin) addressed by the text. Specific and text‑rooted.
 * **Comments** – Distinguish between surface problem and deeper gospel issue; confirm alignment with main points and applications; guard against purely behavioral framing; note if FCF is missing, too broad, or misaligned.
 
-### 7. Extraction Confidence
+### 8. Extraction Confidence
 
 * A floating value (0–1) reflecting internal model confidence in extraction accuracy.  
 * Should consider transcript completeness, clarity, audio artifacts (if hinted), structural ambiguity, or missing proposition.

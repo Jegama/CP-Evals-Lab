@@ -77,6 +77,7 @@ class SermonExtractionStep1(BaseModel):
     Sermon_Introduction: str
     Proposition: str
     Body: List[SermonPoint]
+    Conclusion: str
     General_Comments: SermonGeneralComments
     Fallen_Condition_Focus: SermonFCF
     Extraction_Confidence: float

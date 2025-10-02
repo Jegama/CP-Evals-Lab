@@ -188,6 +188,9 @@ Comments: {_fmt_opt(extraction.Fallen_Condition_Focus.Comments)}
 ### Body
 {points_md}
 
+### Conclusion
+{extraction.Conclusion}
+
 ### General Comments
 * Content: {_fmt_opt(extraction.General_Comments.Content_Comments)}
 * Structure: {_fmt_opt(extraction.General_Comments.Structure_Comments)}
