@@ -49,11 +49,13 @@ Both steps MUST be deterministic (temperature ≈ 0 for structural extraction) a
 ## Scoring Scale (Step 2)
 | Score | Meaning |
 | ----- | ------- |
-| 5 | Exemplary: precise, text‑grounded, Christ‑centered, compelling, pastorally rich. |
-| 4 | Strong: minor omissions or mild unevenness. |
-| 3 | Adequate: clear basics present, lacks depth or consistency. |
-| 2 | Deficient: important elements unclear, shallow, or partially inaccurate. |
-| 1 | Problematic: major inaccuracies, missing essentials, or misleading emphasis. |
+| 5 | Exemplary: reserved for truly exceptional, publishable‑quality execution—text‑anchored, pastorally effective; no substantive improvement needed. |
+| 4 | Strong: solid and text‑anchored; clearly above average; only minor refinement needed (brevity, nuance, balance). |
+| 3 | Adequate: this is the expected baseline for a competent sermon—present but generic/uneven; significant sharpening would help. |
+| 2 | Weak: present but unclear, forced, thin, or inconsistent; recognizable yet fails to achieve its purpose. |
+| 1 | Deficient: absent, inaccurate, misleading, or counter‑productive; a fundamental element is missing or flawed. |
+
+Calibration note: Be a tough but fair grader. The goal is growth, not mere affirmation. Treat 3 as the true midpoint (competent baseline), and do not award 4s or 5s lightly.
 
 > **Operational Rule:** Do not use `null` for missing evidence. If a sub‑criterion is truly not evident, assign **1** (Problematic) to keep aggregates stable.
 
@@ -215,13 +217,19 @@ Feedback: Intensify, focus, seal.
 * **Scoring Confidence** – Float 0–1 reflecting the evaluator's confidence in Step 2 scoring fidelity (quality of Step 1 data, transcript clarity, structural ambiguity, etc.).
 
 ### Scoring Guidance (Heuristic)
+Be a tough but fair grader. The aim is to help the preacher improve, not only to affirm. Use the full 1–5 scale.
+
 | Score | Descriptor | Heuristic Examples |
 | ----- | ---------- | ------------------ |
-| 5 | Exemplary | Fully present; text‑anchored; pastorally effective; no substantive improvement needed. |
-| 4 | Strong | Minor refinement possible (brevity, nuance) but solid. |
-| 3 | Adequate | Present yet uneven, generic, or partially diluted. |
-| 2 | Weak | Significant gaps: unclear, forced, thin, or inconsistent. |
-| 1 | Deficient | Absent, inaccurate, misleading, or counter‑productive. |
+| 5 | Exemplary | Reserved for truly exceptional, publishable‑quality execution; text‑anchored and pastorally effective; no substantive improvement needed. |
+| 4 | Strong | Solid and clearly above average; only minor refinement needed (brevity, nuance, balance). |
+| 3 | Adequate | The expected baseline for a competent sermon; present but generic/uneven; could be significantly sharpened. |
+| 2 | Weak | Present but unclear, forced, thin, or inconsistent; recognizable yet fails to achieve its purpose. |
+| 1 | Deficient | Absent, inaccurate, misleading, or counter‑productive; fundamental element missing or flawed. |
+
+Tie‑breakers:
+- When in doubt, default to the lower score; challenge the sermon to earn higher marks.
+- Use 3 as the true midpoint (adequate), not a soft pass.
 
 ## Aggregated Summary
 
