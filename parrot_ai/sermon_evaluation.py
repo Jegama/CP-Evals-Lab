@@ -167,7 +167,7 @@ class SermonEvaluationEngine:
                 raw = self.provider.generate(scoring_prompt, system=system, model=self.model)
                 data = self._safe_json_parse(raw)
         raw_scoring = SermonScoringStep2Raw(**data)
-        
+
         # Convert raw to full scoring object
         scoring = SermonScoringStep2(
             Introduction=raw_scoring.Introduction,
@@ -182,7 +182,11 @@ class SermonEvaluationEngine:
             Next_Steps=raw_scoring.Next_Steps,
             Scoring_Confidence=raw_scoring.Scoring_Confidence,
         )
-        # Compute aggregated summary per framework and attach
+        
+        # Apply strict calibration heuristics to avoid inflated scores
+        scoring = self._apply_strict_calibration(scoring, extraction)
+
+        # Compute aggregated summary per framework and attach (after calibration)
         scoring.Aggregated_Summary = self._compute_aggregates(scoring, extraction)
 
         # Generate feedback and explanations for the aggregate scores
@@ -283,15 +287,14 @@ class SermonEvaluationEngine:
             scoring.Illustrations.Proportion,
         ])
 
-        # Weighted Overall Impact
-        overall_base = (
-            0.30 * textual_fidelity
-            + 0.20 * proposition_clarity
-            + 0.15 * application_effectiveness
-            + 0.15 * structure_cohesion
-            + 0.10 * illustrations
-            + 0.10 * fcf_identification
-        )
+        overall_base = self._avg([
+            textual_fidelity,
+            proposition_clarity,
+            application_effectiveness,
+            structure_cohesion,
+            illustrations,
+            fcf_identification,
+        ])
         overall = self._clamp(overall_base)
 
         # Round to two decimals per framework guidance
@@ -308,6 +311,146 @@ class SermonEvaluationEngine:
             Overall_Impact_Base=r2(overall_base),
             Overall_Impact=r2(overall),
         )
+
+    # ----------- Post-processing: stricter calibration -----------
+    def _apply_strict_calibration(self, scoring: SermonScoringStep2, extraction: SermonExtractionStep1) -> SermonScoringStep2:
+        """Downshift inflated scores using evidence from Step 1.
+
+        Heuristics (conservative, integer outputs 1–5):
+        - No explicit proposition -> Proposition sub-scores max 2; if any >2, set to 2.
+        - No explicit conclusion -> Conclusion sub-scores max 2.
+        - FCF missing/too vague -> Introduction.FCF_Introduced max 2.
+        - Body points: if >50% lack Applications -> Main_Points.Application_Quality = min(curr, 2).
+        - Body points: if >50% lack Illustrations -> Main_Points.Illustration_Quality = min(curr, 2) and Illustrations.* subs max 3.
+        - If Body has <2 points -> Main_Points.Proportional_and_Coexistent max 2 and Structure cohesion later reflects via aggregates.
+        - If any Step 1 field carries canonical placeholder, bias related category Overall down by 1 (min 1).
+        After changes, recompute each section's Overall as ceil(avg(subs)).
+        """
+        from math import ceil
+
+        def clamp_int(v: int, lo: int = 1, hi: int = 5) -> int:
+            return max(lo, min(hi, int(v)))
+
+        # Convenience references
+        prop_text = (extraction.Proposition or "").strip().lower()
+        concl_text = (extraction.Conclusion or "").strip().lower()
+        fcf_text = (extraction.Fallen_Condition_Focus.FCF or "").strip().lower()
+        body = extraction.Body or []
+
+        # 1) Proposition present?
+        if "no explicit proposition" in prop_text or not prop_text:
+            s = scoring.Proposition
+            s.Principle_and_Application_Wed = clamp_int(min(s.Principle_and_Application_Wed, 2))
+            s.Establishes_Main_Theme = clamp_int(min(s.Establishes_Main_Theme, 2))
+            s.Summarizes_Introduction = clamp_int(min(s.Summarizes_Introduction, 2))
+
+        # 2) Conclusion present?
+        if "no explicit conclusion" in concl_text or not concl_text:
+            s = scoring.Conclusion
+            s.Summary = clamp_int(min(s.Summary, 2))
+            s.Compelling_Exhortation = clamp_int(min(s.Compelling_Exhortation, 2))
+            s.Climax = clamp_int(min(s.Climax, 2))
+            s.Pointed_End = clamp_int(min(s.Pointed_End, 2))
+
+        # 3) FCF specificity
+        vague_terms = ["we all struggle", "general", "people struggle", "sin", "broken", "brokenness"]
+        fcf_vague = (not fcf_text) or (len(fcf_text) < 12) or any(t in fcf_text for t in vague_terms)
+        if fcf_vague:
+            scoring.Introduction.FCF_Introduced = clamp_int(min(scoring.Introduction.FCF_Introduced, 2))
+
+        # 4) Body applications / illustrations
+        total_points = len(body)
+        empty_apps = sum(1 for p in body if not (p.Application or []))
+        empty_illus = sum(1 for p in body if not (p.Illustrations or []))
+        if total_points > 0:
+            if empty_apps / total_points > 0.5:
+                scoring.Main_Points.Application_Quality = clamp_int(min(scoring.Main_Points.Application_Quality, 2))
+            if empty_illus / total_points > 0.5:
+                scoring.Main_Points.Illustration_Quality = clamp_int(min(scoring.Main_Points.Illustration_Quality, 2))
+                # Also constrain Illustrations category a bit if globally sparse
+                scoring.Illustrations.Lived_Body_Detail = clamp_int(min(scoring.Illustrations.Lived_Body_Detail, 3))
+                scoring.Illustrations.Strengthens_Points = clamp_int(min(scoring.Illustrations.Strengthens_Points, 3))
+                scoring.Illustrations.Proportion = clamp_int(min(scoring.Illustrations.Proportion, 3))
+
+        # 5) Too few points harms proportional/coexistent
+        if total_points < 2:
+            scoring.Main_Points.Proportional_and_Coexistent = clamp_int(min(scoring.Main_Points.Proportional_and_Coexistent, 2))
+
+        # 6) If placeholders present, downshift related Overall by 1 later
+        placeholder_bias = 0
+        placeholder_bias += 1 if ("no explicit proposition" in prop_text or not prop_text) else 0
+        placeholder_bias += 1 if ("no explicit conclusion" in concl_text or not concl_text) else 0
+
+        # Recompute per-section Overall as ceil(avg of sub-scores) then apply placeholder bias
+        def recompute_overall(values: list[int], current_overall: int) -> int:
+            avg_val = sum(values) / max(1, len(values))
+            recomputed = clamp_int(ceil(avg_val))
+            if placeholder_bias and current_overall >= recomputed:
+                recomputed = clamp_int(recomputed - 1)
+            return recomputed
+
+        scoring.Introduction.Overall = recompute_overall(
+            [scoring.Introduction.FCF_Introduced, scoring.Introduction.Arouses_Attention],
+            scoring.Introduction.Overall,
+        )
+        scoring.Proposition.Overall = recompute_overall(
+            [
+                scoring.Proposition.Principle_and_Application_Wed,
+                scoring.Proposition.Establishes_Main_Theme,
+                scoring.Proposition.Summarizes_Introduction,
+            ],
+            scoring.Proposition.Overall,
+        )
+        scoring.Main_Points.Overall = recompute_overall(
+            [
+                scoring.Main_Points.Clarity,
+                scoring.Main_Points.Hortatory_Universal_Truths,
+                scoring.Main_Points.Proportional_and_Coexistent,
+                scoring.Main_Points.Exposition_Quality,
+                scoring.Main_Points.Illustration_Quality,
+                scoring.Main_Points.Application_Quality,
+            ],
+            scoring.Main_Points.Overall,
+        )
+        scoring.Exegetical_Support.Overall = recompute_overall(
+            [
+                scoring.Exegetical_Support.Alignment_with_Text,
+                scoring.Exegetical_Support.Handles_Difficulties,
+                scoring.Exegetical_Support.Proof_Accuracy_and_Clarity,
+                scoring.Exegetical_Support.Context_and_Genre_Considered,
+                scoring.Exegetical_Support.Not_Belabored,
+                scoring.Exegetical_Support.Aids_Rather_Than_Impresses,
+            ],
+            scoring.Exegetical_Support.Overall,
+        )
+        scoring.Application.Overall = recompute_overall(
+            [
+                scoring.Application.Clear_and_Practical,
+                scoring.Application.Redemptive_Focus,
+                scoring.Application.Mandate_vs_Idea_Distinction,
+                scoring.Application.Passage_Supported,
+            ],
+            scoring.Application.Overall,
+        )
+        scoring.Illustrations.Overall = recompute_overall(
+            [
+                scoring.Illustrations.Lived_Body_Detail,
+                scoring.Illustrations.Strengthens_Points,
+                scoring.Illustrations.Proportion,
+            ],
+            scoring.Illustrations.Overall,
+        )
+        scoring.Conclusion.Overall = recompute_overall(
+            [
+                scoring.Conclusion.Summary,
+                scoring.Conclusion.Compelling_Exhortation,
+                scoring.Conclusion.Climax,
+                scoring.Conclusion.Pointed_End,
+            ],
+            scoring.Conclusion.Overall,
+        )
+
+        return scoring
 
     # ----------- Audio support (Gemini only) -----------
     def _load_audio_cache(self) -> Dict[str, Any]:

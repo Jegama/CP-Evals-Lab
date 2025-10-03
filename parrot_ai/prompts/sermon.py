@@ -124,7 +124,7 @@ Extract the components into a single, valid JSON object matching the `SermonExtr
 
 # ------------------------- Step 2: Scoring Prompts -------------------------
 
-SCORING_SYSTEM_PROMPT = """You are a master homiletics evaluator and coach, applying a strict, rubric-based scoring system.
+SCORING_SYSTEM_PROMPT = f"""You are a master homiletics evaluator and coach, applying a strict, rubric-based scoring system.
 
 {BASIC_OVERVIEW}
 
@@ -248,8 +248,7 @@ Output requirements:
    - The next sentence must provide the primary reason for the score, citing specific evidence from the Step 1 extraction or Step 2 feedback (e.g., "Handled difficulties well, but historical context was thin.").
    - The final sentence(s) must provide a concrete, actionable recommendation for improvement. Frame it as a "next time" goal (e.g., "Next time, add one historical detail in the intro that clarifies audience and setting.").
 3. For the `Overall_Impact` field, do all of the following:
-   - State both values: the weighted base composite (`Overall_Impact_Base`) and the final `Overall_Impact`.
-   - Explain which components most pulled the score up or down given their weights (e.g., "Textual Fidelity (30%) at 3.8 buoyed the composite, while Proposition Clarity (20%) at 2.9 dragged it down").
+   - Explain the components that contributed to the score (e.g., "Textual Fidelity at 3.8 buoyed the composite, while Proposition Clarity at 2.9 dragged it down").
    - Close with one practical, highest‑leverage “next time” coaching move that would most improve the overall score.
 4. Maintain a pastoral, constructive tone. The feedback should feel like a partnership in the service of the Gospel, not a judgment.
 5. Use the actual numbers provided to you; keep decimals to two places.
@@ -269,16 +268,4 @@ Metric derivations reminder:
 * Application_Effectiveness ≈ avg(Application.Clear_and_Practical, Application.Redemptive_Focus, Application.Mandate_vs_Idea_Distinction, Application.Passage_Supported, Main_Points.Application_Quality)
 * Structure_Cohesion ≈ avg(Main_Points.Proportional_and_Coexistent, Conclusion.Summary, Conclusion.Compelling_Exhortation, Conclusion.Climax, Conclusion.Pointed_End)
 * Illustrations ≈ avg(Main_Points.Illustration_Quality, Illustrations.Lived_Body_Detail, Illustrations.Strengthens_Points, Illustrations.Proportion)
-* Overall_Impact – Weighted synthesis (see algorithm below).
-
-### Overall Impact Weighting Algorithm
-
-Base weighted composite (before narrative adjustment):
-* Textual_Fidelity: 0.30
-* Proposition_Clarity: 0.20
-* Application_Effectiveness: 0.15
-* Structure_Cohesion: 0.15
-* Illustrations: 0.10
-* FCF_Identification: 0.10
-
-Formula: sum(weight_i * score_i)."""
+* Overall_Impact ≈ avg(Textual_Fidelity, Proposition_Clarity, Application_Effectiveness, Structure_Cohesion, Illustrations, FCF_Identification)"""

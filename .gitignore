@@ -19,3 +19,4 @@ huggingface/
 *.mp3
 .cache/*
 data/sermons_evals/*
+*.ps1
