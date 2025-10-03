@@ -19,6 +19,7 @@ Building high‑quality, reformed, multilingual Q&A datasets for Calvinist Parro
 | Data Sources | Curated Arabic (and future English) Christian Q&A from GotQuestions + catechism material. |
 | Dataset Builder | `cp_create_dataset.py` merges sources and rewrites answers via a controllable ParrotAI chain. |
 | LLM Evaluation | `cp_eval_llms.py` generates or scores model answers on a fixed 100‑question evaluation set with rubric aggregation. |
+| Sermon Evaluation | `cp_eval_sermons.py` performs two‑step sermon evaluation (extraction + rubric scoring) from text transcripts or audio, with aggregated CSV and optional Markdown reports. |
 | Outputs | Training JSONL (messages format), evaluation comparison CSV, per‑run JSONL judge results. |
 
 ---
@@ -51,10 +52,13 @@ data/
 			api_eval_comparison.csv        		# Aggregated rubric means (API mode)
 			eval_results_*.jsonl	      		# Raw judge outputs for API evaluations
 			generated_*.jsonl              		# Auto-created datasets from API generation
-		english/                          		# (Future expansion: mirrors arabic/ layout)
+	english/	                          		# (Future expansion: mirrors arabic/ layout)
+	sermons                      	  			# Example sermon audio inputs (mp3, wav, m4a)
+	sermons_evals                 	 			# Sermon evaluation outputs (step1/step2 JSON, aggregated CSV, Markdown)
 parrot_ai/                          			# Core chain + evaluation engine components
-cp_create_dataset.py            			# Build / enrich training dataset
+cp_create_dataset.py            				# Build / enrich training dataset
 cp_eval_llms.py                      			# Unified generation + evaluation CLI (language + mode aware)
+cp_eval_sermons.py                  			# Two‑step sermon evaluation (text or audio) with aggregated CSV + Markdown
 ```
 
 ---
@@ -119,6 +123,56 @@ Unix/macOS:
 export HF_TOKEN=hf_xxx
 export OPENAI_API_KEY=sk-xxx
 ```
+
+---
+
+## 2. Sermon Evaluation (Two‑Step) — `cp_eval_sermons.py`
+This CLI evaluates sermons using a language‑agnostic, homiletics‑aware rubric in two steps:
+
+1) Step 1: Structural extraction to JSON (Scripture intro, sermon intro, proposition, body points, conclusion, FCF, comments).
+2) Step 2: Analytical scoring (1–5) with strengths, growth areas, next steps, and aggregated roll‑ups.
+
+Inputs: text transcript (Markdown or plain text) or audio file. Audio evaluation requires the Gemini provider (files API).
+
+Supported providers: `openai` (text), `gemini` (text + audio). Default model: `gpt-5-mini`.
+
+### Common flags
+| Flag | Meaning |
+|------|---------|
+| `--mode {text,audio}` | Input mode. Audio requires `--provider gemini` and an audio file. |
+| `--provider {openai,gemini}` | Evaluation provider. |
+| `--model <model_id>` | Evaluator model (e.g., `gpt-5-mini`, `gemini-2.5-flash`). |
+| `--transcript <path>` | Path to transcript file when `--mode text`. |
+| `--audio <path>` | Path to audio file when `--mode audio`. |
+| `--out-dir <dir>` | Output directory for artifacts (default `data/sermons_evals`). |
+| `--label <name>` | Short run label (used in filenames). |
+| `--preacher <name>` | Preacher identifier (stored in aggregated CSV). |
+| `--markdown` | Also render a human‑friendly Markdown report. |
+
+Environment variables: requires `OPENAI_API_KEY` for `--provider openai`; or `GEMINI_API_KEY` for `--provider gemini`.
+
+### Examples
+Text transcript with OpenAI:
+```cmd
+python cp_eval_sermons.py --mode text --provider openai --model gpt-5-mini ^
+	--transcript resources/Example_of_other_sermon_evals/eval_colossians_3.18-21.md ^
+	--out-dir data/sermons_evals --label col318-21 --preacher "David" --markdown
+```
+
+Audio with Gemini Files API:
+```cmd
+python cp_eval_sermons.py --mode audio --provider gemini --model gemini-2.5-flash ^
+	--audio data/sermons/Ephesians_4_7-16 - Clark.mp3 ^
+	--out-dir data/sermons_evals --label eph4_7-16 --preacher "Josh" --markdown
+```
+
+Outputs per run:
+- `<label>_step1_extraction.json` — single JSON line with Step 1 structure.
+- `<label>_step2_scoring.json` — single JSON line with Step 2 scoring + calibrated aggregates.
+- `sermon_aggregated_summary.csv` — appended roll‑ups, grouped by preacher.
+- Optional `<label>.md` — readable report (if `--markdown`).
+
+Default artifact directory: `data/sermons_evals`.
 
 ---
 

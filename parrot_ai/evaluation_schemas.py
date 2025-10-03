@@ -77,6 +77,7 @@ class SermonExtractionStep1(BaseModel):
     Sermon_Introduction: str
     Proposition: str
     Body: List[SermonPoint]
+    Conclusion: str
     General_Comments: SermonGeneralComments
     Fallen_Condition_Focus: SermonFCF
     Extraction_Confidence: float
@@ -149,8 +150,6 @@ class AggregatedSummary(BaseModel):
     Structure_Cohesion: float
     Illustrations: float
     Overall_Impact_Base: float
-    Overall_Impact_Adjustment: float = 0.0
-    Adjustment_Rationale: Optional[str] = None
     Overall_Impact: float
 
 class AggregatedSummaryFeedback(BaseModel):

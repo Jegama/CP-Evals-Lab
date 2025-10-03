@@ -55,13 +55,9 @@ def render_markdown(
 | Structure Cohesion | {a.Structure_Cohesion} | {_agg_fb('Structure_Cohesion')} |
 | Illustrations | {a.Illustrations} | {_agg_fb('Illustrations')} |
 
-**Overall Impact (weighted): {a.Overall_Impact}**
+**Overall Impact: {a.Overall_Impact}**
 
 {overall_fb}
-
-Base: {a.Overall_Impact_Base}  
-Adjustment: {a.Overall_Impact_Adjustment}  
-{('Rationale: ' + a.Adjustment_Rationale) if a.Adjustment_Rationale else ''}
 """.strip()
 
     # Step 1: Structure
@@ -167,12 +163,20 @@ Feedback: {_fmt_opt(feedback)}
 # {title}
 
 Generated: {ts}  
-Provider: {provider or '-'}  
 Model: {model or '-'}  
 Extraction Confidence: {extraction.Extraction_Confidence}  
 Scoring Confidence: {scoring.Scoring_Confidence}
 
 {agg_md}
+
+### Strengths
+{strengths_md}
+
+### Growth Areas
+{growth_md}
+
+### Next Steps
+{next_md}
 
 ## Step 1 – Structural Extraction
 
@@ -193,6 +197,9 @@ Comments: {_fmt_opt(extraction.Fallen_Condition_Focus.Comments)}
 ### Body
 {points_md}
 
+### Conclusion
+{extraction.Conclusion}
+
 ### General Comments
 * Content: {_fmt_opt(extraction.General_Comments.Content_Comments)}
 * Structure: {_fmt_opt(extraction.General_Comments.Structure_Comments)}
@@ -201,15 +208,6 @@ Comments: {_fmt_opt(extraction.Fallen_Condition_Focus.Comments)}
 ## Step 2 – Analytical Scoring
 
 {scoring_md}
-
-### Strengths
-{strengths_md}
-
-### Growth Areas
-{growth_md}
-
-### Next Steps
-{next_md}
 """.strip()
 
     return md

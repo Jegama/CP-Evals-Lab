@@ -340,7 +340,7 @@ class ParrotAIOpenAI(BaseParrotAI):
         messages: list[dict[str, str]],
         response_model: Any,
         model: Optional[str] = None,
-        seed: Optional[int] = None,
+        seed: Optional[int] = 1689,
     ) -> dict:
         """Call chat.completions.parse with a Pydantic response_model and return dict."""
         model_to_use = model or self.model_name or "gpt-5-mini"
@@ -501,7 +501,7 @@ class ParrotAIGemini(BaseParrotAI):
         response_schema: Any,
         system: Optional[str] = None,
         model: Optional[str] = None,
-        seed: Optional[int] = None,
+        seed: Optional[int] = 1689,
     ) -> dict:
         model_to_use = model or self.model_name or "gemini-2.5-flash"
         if system is not None:
@@ -535,7 +535,7 @@ class ParrotAIGemini(BaseParrotAI):
         response_schema: Any,
         system: Optional[str] = None,
         model: Optional[str] = None,
-        seed: Optional[int] = None,
+        seed: Optional[int] = 1689,
     ) -> dict:
         model_to_use = model or self.model_name or "gemini-2.5-flash"
         if system is not None:

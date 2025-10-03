@@ -49,11 +49,13 @@ Both steps MUST be deterministic (temperature ≈ 0 for structural extraction) a
 ## Scoring Scale (Step 2)
 | Score | Meaning |
 | ----- | ------- |
-| 5 | Exemplary: precise, text‑grounded, Christ‑centered, compelling, pastorally rich. |
-| 4 | Strong: minor omissions or mild unevenness. |
-| 3 | Adequate: clear basics present, lacks depth or consistency. |
-| 2 | Deficient: important elements unclear, shallow, or partially inaccurate. |
-| 1 | Problematic: major inaccuracies, missing essentials, or misleading emphasis. |
+| 5 | Exemplary: reserved for truly exceptional, publishable‑quality execution—text‑anchored, pastorally effective; no substantive improvement needed. |
+| 4 | Strong: solid and text‑anchored; clearly above average; only minor refinement needed (brevity, nuance, balance). |
+| 3 | Adequate: this is the expected baseline for a competent sermon—present but generic/uneven; significant sharpening would help. |
+| 2 | Weak: present but unclear, forced, thin, or inconsistent; recognizable yet fails to achieve its purpose. |
+| 1 | Deficient: absent, inaccurate, misleading, or counter‑productive; a fundamental element is missing or flawed. |
+
+Calibration note: Be a tough but fair grader. The goal is growth, not mere affirmation. Treat 3 as the true midpoint (competent baseline), and do not award 4s or 5s lightly.
 
 > **Operational Rule:** Do not use `null` for missing evidence. If a sub‑criterion is truly not evident, assign **1** (Problematic) to keep aggregates stable.
 
@@ -96,18 +98,24 @@ For each main point:
 * **Comments** – Evaluate exegesis fidelity, clarity, progression toward climax, over‑proof‑texting risks, handling of original audience.
 * **Feedback** – Constructive, actionable coaching (what to refine, add, trim, rephrase, or reorder).
 
-### 5. General Comments
+### 5. Conclusion
+
+* Capture the conclusion in a single paragraph that mirrors the preacher's actual landing—include the stated recap, exhortation, gospel emphasis, and tone as delivered (do not invent missing elements).
+* Highlight whether the conclusion provided a compelling exhortation, climax, and pointed ending within that paragraph; if certain elements were absent, say so plainly inside the paragraph rather than fabricating them.
+* **Canonical placeholder when absent:** If the preacher offered no discernible conclusion, set the field to "No explicit conclusion provided".
+
+### 6. General Comments
 
 * **Content Comments** – Doctrinal substance? Faithful synthesis? Christ and Gospel explicit where warranted?
 * **Structure Comments** – Logical flow, unity, escalation, transitions, balance of explanation vs. application.
 * **Explanation Comments** – Depth of exegesis, context (historical, literary), handling of difficult phrases, theological integration.
 
-### 6. Fallen Condition Focus (FCF)
+### 7. Fallen Condition Focus (FCF)
 
 * **FCF** – The shared human brokenness, limitation, or need (not always explicit sin) addressed by the text. Specific and text‑rooted.
 * **Comments** – Distinguish between surface problem and deeper gospel issue; confirm alignment with main points and applications; guard against purely behavioral framing; note if FCF is missing, too broad, or misaligned.
 
-### 7. Extraction Confidence
+### 8. Extraction Confidence
 
 * A floating value (0–1) reflecting internal model confidence in extraction accuracy.  
 * Should consider transcript completeness, clarity, audio artifacts (if hinted), structural ambiguity, or missing proposition.
@@ -209,13 +217,19 @@ Feedback: Intensify, focus, seal.
 * **Scoring Confidence** – Float 0–1 reflecting the evaluator's confidence in Step 2 scoring fidelity (quality of Step 1 data, transcript clarity, structural ambiguity, etc.).
 
 ### Scoring Guidance (Heuristic)
+Be a tough but fair grader. The aim is to help the preacher improve, not only to affirm. Use the full 1–5 scale.
+
 | Score | Descriptor | Heuristic Examples |
 | ----- | ---------- | ------------------ |
-| 5 | Exemplary | Fully present; text‑anchored; pastorally effective; no substantive improvement needed. |
-| 4 | Strong | Minor refinement possible (brevity, nuance) but solid. |
-| 3 | Adequate | Present yet uneven, generic, or partially diluted. |
-| 2 | Weak | Significant gaps: unclear, forced, thin, or inconsistent. |
-| 1 | Deficient | Absent, inaccurate, misleading, or counter‑productive. |
+| 5 | Exemplary | Reserved for truly exceptional, publishable‑quality execution; text‑anchored and pastorally effective; no substantive improvement needed. |
+| 4 | Strong | Solid and clearly above average; only minor refinement needed (brevity, nuance, balance). |
+| 3 | Adequate | The expected baseline for a competent sermon; present but generic/uneven; could be significantly sharpened. |
+| 2 | Weak | Present but unclear, forced, thin, or inconsistent; recognizable yet fails to achieve its purpose. |
+| 1 | Deficient | Absent, inaccurate, misleading, or counter‑productive; fundamental element missing or flawed. |
+
+Tie‑breakers:
+- When in doubt, default to the lower score; challenge the sermon to earn higher marks.
+- Use 3 as the true midpoint (adequate), not a soft pass.
 
 ## Aggregated Summary
 
@@ -226,19 +240,7 @@ Compute rolled‑up composite categories for dashboards by averaging related raw
 * Application_Effectiveness ≈ avg(Application.Clear & Practical, Redemptive Focus, Mandate vs Idea Distinction, Passage Supported, Main Points.Application Quality)
 * Structure_Cohesion ≈ avg(Main Points.Proportional & Coexistent, Conclusion.Summary, Conclusion.Compelling Exhortation, Conclusion.Climax, Conclusion.Pointed End)
 * Illustrations ≈ avg(Main Points.Illustration Quality, Illustrations.Lived-Body Detail, Illustrations.Strengthens Points, Illustrations.Proportion)
-* Overall_Impact – Weighted synthesis (see algorithm below).
-
-### Overall Impact Weighting Algorithm
-
-Base weighted composite (before narrative adjustment):
-* Textual_Fidelity: 0.30
-* Proposition_Clarity: 0.20
-* Application_Effectiveness: 0.15
-* Structure_Cohesion: 0.15
-* Illustrations: 0.10
-* FCF_Identification: 0.10
-
-Formula: sum(weight_i * score_i). Result then optionally adjusted by ±0.25 (max) if evaluator narrative identifies a compelling qualitative factor not fully captured (e.g., unusually pastoral tone or severe pastoral misstep). Any adjustment must be accompanied by a one‑sentence rationale appended to Action Steps or a future "Evaluator Notes" field. Cap final value to [1,5] then scale to two decimals.
+* Overall_Impact ≈ avg(Textual_Fidelity, Proposition_Clarity, Application_Effectiveness, Structure_Cohesion, Illustrations, FCF_Identification).
 
 ---
 
