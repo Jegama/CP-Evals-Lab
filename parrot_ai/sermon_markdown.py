@@ -46,6 +46,10 @@ def render_markdown(
         agg_md = f"""
 ## Aggregated Summary
 
+**Overall Impact: {a.Overall_Impact}**
+
+{overall_fb}
+
 | Metric | Score | Feedback |
 |---|---:|---|
 | Textual Fidelity | {a.Textual_Fidelity} | {_agg_fb('Textual_Fidelity')} |
@@ -54,10 +58,6 @@ def render_markdown(
 | Application Effectiveness | {a.Application_Effectiveness} | {_agg_fb('Application_Effectiveness')} |
 | Structure Cohesion | {a.Structure_Cohesion} | {_agg_fb('Structure_Cohesion')} |
 | Illustrations | {a.Illustrations} | {_agg_fb('Illustrations')} |
-
-**Overall Impact: {a.Overall_Impact}**
-
-{overall_fb}
 """.strip()
 
     # Step 1: Structure
