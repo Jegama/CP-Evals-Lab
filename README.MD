@@ -149,6 +149,7 @@ This CLI evaluates sermons using a language‑agnostic, homiletics‑aware rubri
 | `--num-scoring-runs N` | Number of parallel Step 2 runs. Default 1 (single run). Higher values (e.g., 3) improve consistency but increase cost proportionally. |
 | `--out-dir <dir>` | Output directory for artifacts (default `data/sermons_evals`). |
 | `--label <name>` | Short run label (used in filenames). |
+| `--md-file <path>` | Optional explicit Markdown output path; defaults to `<out-dir>/<label>.md`. |
 | `--preacher <name>` | Preacher identifier (stored in aggregated CSV). |
 | `--markdown` | Also render a human‑friendly Markdown report. |
 
@@ -408,14 +409,18 @@ Internal use for now. Feel free to open issues / suggestions (naming, rubric ref
 ---
 
 ## Contact
-For questions or support, please [reach out](mailto:jesusmancilla@calvinistparrotministries.org).
+For questions or support, please [reach out](contact@calvinistparrotministries.org).
 
 # Soli Deo Gloria
 
 **"For from Him and through Him and to Him are all things. To Him be the glory forever! Amen."**
 - Romans 11:36
 
-[Copy.church](https://copy.church/explain/importance/) | [sellingJesus.org](https://sellingJesus.org/free)
----|---
-![Copy.church](https://copy.church/badges/lcc_alt_pde.png) | ![sellingJesus.org/free](https://copy.church/badges/sj_standard_pd.png)
-
+<div align="center">`
+  <a href="https://copy.church/explain/importance/">
+    <img src="https://copy.church/badges/lcc_alt_pde.png" alt="Copy.church" height="100" />
+  </a>
+  <a href="https://sellingJesus.org/free">
+    <img src="https://copy.church/badges/sj_standard_pd.png" alt="sellingJesus.org/free" height="100" />
+  </a>
+</div>
