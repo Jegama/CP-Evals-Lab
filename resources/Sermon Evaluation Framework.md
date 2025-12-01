@@ -42,7 +42,19 @@ In short, a sermon "scores well" here when it faithfully exposes the Spirit‑in
 2. **Step 2 – Analytical Scoring (Synthesis & Coaching)**  
 	 Using the structured Step 1 output, the model assigns 1–5 scores across higher‑level qualitative criteria (textual fidelity, proposition clarity, FCF identification, Christ‑centeredness, application effectiveness, structure cohesion, illustration quality, pastoral tone, overall impact) and produces strengths, growth areas, and actionable next steps.
 
-Both steps MUST be deterministic (temperature ≈ 0 for structural extraction) and always return valid JSON.
+### Advanced Evaluation Methodologies
+
+**Self-Consistency (Multi-Run Harmonization)**  
+To improve reliability and reduce variance, Step 2 can be run in "Self-Consistency" mode (default: 3 runs).
+1.  **Parallel Scoring:** The Step 2 analysis is run multiple times in parallel with different random seeds.
+2.  **Confidence-Weighted Averaging:** Integer scores are averaged across runs, weighted by the model's self-reported `Scoring Confidence` for each run.
+3.  **Feedback Harmonization (Self-Refine):** A meta-evaluator LLM synthesizes the qualitative feedback from all runs, highlighting consensus views and noting significant minority insights (biasing toward critical feedback in subjective disagreements).
+
+**Duration Penalty (Time Management)**  
+Sermons are assessed for optimal duration (target: 35–50 minutes) to encourage discipline and respect for the congregation's capacity.
+*   **Short Penalty (< 35m):** 0.1 point penalty per minute under 35m (max 1.0).
+*   **Long Penalty (> 50m):** ~0.067 point penalty per minute over 50m (1 point per 15m, max 1.0).
+*   The penalty is deducted strictly from the `Overall_Impact` score.
 
 ---
 
@@ -240,7 +252,12 @@ Compute rolled‑up composite categories for dashboards by averaging related raw
 * Application_Effectiveness ≈ avg(Application.Clear & Practical, Redemptive Focus, Mandate vs Idea Distinction, Passage Supported, Main Points.Application Quality)
 * Structure_Cohesion ≈ avg(Main Points.Proportional & Coexistent, Conclusion.Summary, Conclusion.Compelling Exhortation, Conclusion.Climax, Conclusion.Pointed End)
 * Illustrations ≈ avg(Main Points.Illustration Quality, Illustrations.Lived-Body Detail, Illustrations.Strengthens Points, Illustrations.Proportion)
-* Overall_Impact ≈ avg(Textual_Fidelity, Proposition_Clarity, Application_Effectiveness, Structure_Cohesion, Illustrations, Introduction).
+* Overall_Impact ≈ avg(Textual_Fidelity, Proposition_Clarity, Application_Effectiveness, Structure_Cohesion, Illustrations, Introduction) - Duration_Penalty.
+
+**Duration Penalty Logic:**
+*   If duration < 35m: `Penalty = min((35 - minutes) / 10.0, 1.0)`
+*   If duration > 50m: `Penalty = min((minutes - 50) / 15.0, 1.0)`
+*   Otherwise: `Penalty = 0`
 
 ---
 
