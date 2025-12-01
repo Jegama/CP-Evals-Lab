@@ -132,47 +132,59 @@ This CLI evaluates sermons using a language‑agnostic, homiletics‑aware rubri
 1) Step 1: Structural extraction to JSON (Scripture intro, sermon intro, proposition, body points, conclusion, FCF, comments).
 2) Step 2: Analytical scoring (1–5) with strengths, growth areas, next steps, and aggregated roll‑ups.
 
-Inputs: text transcript (Markdown or plain text) or audio file. Audio evaluation requires the Gemini provider (files API).
+**Audio-only:** This tool requires audio input (mp3, wav, m4a) and uses Gemini's Files API for processing and evaluation.
 
-Supported providers: `openai` (text), `gemini` (text + audio). Default model: `gpt-5-mini`.
+**Supported provider:** `gemini` (audio processing via Files API). Default model: `gemini-2.5-flash`.
+
+### Core Features
+- **Audio Verification:** Step 2 scoring receives the audio file for vocal delivery assessment (tone, pacing, emphasis).
+- **Duration Penalty:** Audio evaluations extract duration using `mutagen`. Sermons <35 minutes or >50 minutes receive an automatic penalty (up to -1.0 point) applied to `Overall_Impact`.
+- **Multi-Run Scoring (Self-Consistency):** Use `--num-scoring-runs N` to run N independent scoring runs with different random seeds, then harmonize via confidence-weighted averaging. A meta-evaluator LLM synthesizes feedback from all runs, capturing consensus and noting dissent. This reduces bias and improves fairness at ~4× the base cost (e.g., 3 runs + 1 harmonization call).
 
 ### Common flags
 | Flag | Meaning |
 |------|---------|
-| `--mode {text,audio}` | Input mode. Audio requires `--provider gemini` and an audio file. |
-| `--provider {openai,gemini}` | Evaluation provider. |
-| `--model <model_id>` | Evaluator model (e.g., `gpt-5-mini`, `gemini-2.5-flash`). |
-| `--transcript <path>` | Path to transcript file when `--mode text`. |
-| `--audio <path>` | Path to audio file when `--mode audio`. |
+| `--audio <path>` | **Required.** Path to sermon audio file (mp3, wav, m4a). |
+| `--model <model_id>` | Evaluator model (default `gemini-2.5-flash`). |
+| `--num-scoring-runs N` | Number of parallel Step 2 runs. Default 1 (single run). Higher values (e.g., 3) improve consistency but increase cost proportionally. |
 | `--out-dir <dir>` | Output directory for artifacts (default `data/sermons_evals`). |
 | `--label <name>` | Short run label (used in filenames). |
+| `--md-file <path>` | Optional explicit Markdown output path; defaults to `<out-dir>/<label>.md`. |
 | `--preacher <name>` | Preacher identifier (stored in aggregated CSV). |
 | `--markdown` | Also render a human‑friendly Markdown report. |
 
-Environment variables: requires `OPENAI_API_KEY` for `--provider openai`; or `GEMINI_API_KEY` for `--provider gemini`.
+Environment variables: requires `GEMINI_API_KEY`.
 
 ### Examples
-Text transcript with OpenAI:
+Single-run evaluation:
 ```cmd
-python cp_eval_sermons.py --mode text --provider openai --model gpt-5-mini ^
-	--transcript resources/Example_of_other_sermon_evals/eval_colossians_3.18-21.md ^
-	--out-dir data/sermons_evals --label col318-21 --preacher "David" --markdown
-```
-
-Audio with Gemini Files API:
-```cmd
-python cp_eval_sermons.py --mode audio --provider gemini --model gemini-2.5-flash ^
+python cp_eval_sermons.py ^
 	--audio data/sermons/Ephesians_4_7-16 - Clark.mp3 ^
 	--out-dir data/sermons_evals --label eph4_7-16 --preacher "Josh" --markdown
 ```
 
+Multi-run self-consistency (3 parallel runs + harmonization):
+```cmd
+python cp_eval_sermons.py --num-scoring-runs 3 ^
+	--audio data/sermons/Ephesians_4_7-16 - Clark.mp3 ^
+	--out-dir data/sermons_evals --label eph4_7-16_multi --preacher "Josh" --markdown
+```
+
 Outputs per run:
-- `<label>_step1_extraction.json` — single JSON line with Step 1 structure.
-- `<label>_step2_scoring.json` — single JSON line with Step 2 scoring + calibrated aggregates.
-- `sermon_aggregated_summary.csv` — appended roll‑ups, grouped by preacher.
-- Optional `<label>.md` — readable report (if `--markdown`).
+- `<label>_step1_extraction.json` — single JSON line with Step 1 structure and extracted duration.
+- `<label>_step2_scoring.json` — single JSON line with Step 2 scoring + calibrated aggregates (duration penalty applied).
+- `sermon_aggregated_summary.csv` — appended roll‑ups grouped by preacher, including `audio_duration_minutes`, `duration_penalty`, `num_scoring_runs` columns.
+- Optional `<label>.md` — readable report with Duration Analysis and Evaluation Methodology sections (if `--markdown`).
 
 Default artifact directory: `data/sermons_evals`.
+
+### Cost Considerations (Multi-Run)
+Multi-run scoring (`--num-scoring-runs > 1`) multiplies Step 2 costs:
+- **Formula:** `(N runs × Step 2 base cost) + (1 harmonization call cost)`
+- **Example:** 30-minute audio sermon, single run ~$0.15 → 3 runs + harmonization ~$0.60 (4× base)
+- Harmonization call uses text-only input (extracted scores + feedback) so cost is minimal compared to Step 2 runs.
+
+Use single run (default) for routine evaluations; reserve multi-run for high-stakes assessments or model comparison studies.
 
 ---
 
@@ -397,14 +409,18 @@ Internal use for now. Feel free to open issues / suggestions (naming, rubric ref
 ---
 
 ## Contact
-For questions or support, please [reach out](mailto:jesusmancilla@calvinistparrotministries.org).
+For questions or support, please [reach out](contact@calvinistparrotministries.org).
 
 # Soli Deo Gloria
 
 **"For from Him and through Him and to Him are all things. To Him be the glory forever! Amen."**
 - Romans 11:36
 
-[Copy.church](https://copy.church/explain/importance/) | [sellingJesus.org](https://sellingJesus.org/free)
----|---
-![Copy.church](https://copy.church/badges/lcc_alt_pde.png) | ![sellingJesus.org/free](https://copy.church/badges/sj_standard_pd.png)
-
+<div align="center">`
+  <a href="https://copy.church/explain/importance/">
+    <img src="https://copy.church/badges/lcc_alt_pde.png" alt="Copy.church" height="100" />
+  </a>
+  <a href="https://sellingJesus.org/free">
+    <img src="https://copy.church/badges/sj_standard_pd.png" alt="sellingJesus.org/free" height="100" />
+  </a>
+</div>

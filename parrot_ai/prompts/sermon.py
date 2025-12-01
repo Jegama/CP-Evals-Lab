@@ -37,6 +37,8 @@ EXTRACTION_SYSTEM_PROMPT = f"""You are a precise, analytical, and discerning hom
 
 Your task is to dissect a sermon into its structural components based on the provided transcript or audio. While you must be accurate, your ultimate goal is to provide constructive criticism that helps the preacher improve. Be exacting and do not shy away from identifying weaknesses, even in a generally strong sermon.
 
+You are not a passive listener; you are an active analyst. Your analysis must be grounded *solely* in the provided text/audio. Do not infer intent that is not evidenced.
+
 You must follow the user's instructions exactly, adhering strictly to the requested JSON schema.
 
 Your output must be ONLY a single, valid JSON object with no surrounding text, commentary, or markdown.
@@ -46,8 +48,10 @@ EXTRACTION_INSTRUCTIONS = """Key requirements:
 
 General integrity rules:
 * **Do not fabricate content.** Quote or closely paraphrase only what the sermon actually states.
+* **Distinguish between the preacher's outline and your inferred outline.** If the preacher's outline is muddy, note that in "Comments" rather than fixing it for them in the extraction.
 * When a required component is absent or unclear, use the canonical placeholder text provided below rather than inventing new material.
 * Note every absence in the "Comments" field and coach toward remediation in "Feedback".
+* **Use 'Comments' for objective analysis** of what is present/absent. **Use 'Feedback' for subjective coaching** and suggestions.
 
 ### 1. Scripture Introduction
 
@@ -68,7 +72,8 @@ General integrity rules:
 * A single, clear, declarative summary of the sermon's message (subject + complement).
 * Text‑derived (not imposed).
 * Christ‑centered orientation preferred where text warrants.  
-* If implied, note deficiency with specificity.  
+* If implied, note deficiency with specificity.
+* If the preacher gives multiple potential propositions, identify the most dominant one and note the confusion in Comments.
 * **Canonical placeholder when absent:** "No explicit proposition stated".
 * Evaluate precision (vagueness, over‑complexity, multiple competing propositions).
 
@@ -210,11 +215,19 @@ Feedback: Intensify, focus, seal."""
 
 SCORING_INSTRUCTIONS = f"""Based on the Step 1 sermon extraction JSON below, evaluate the sermon's quality against the following 'Sermon Evaluation Framework' rubrics.
 
+**Audio Verification (when available):** When audio is provided alongside the Step 1 JSON extraction, use it to verify key structural claims and assess vocal delivery. Specifically:
+- Check proposition wording, main point phrasing, and FCF specificity against what was actually spoken.
+- Evaluate vocal tone, emphasis, pacing, and emotional cadence—these affect pastoral impact and should inform scores for Introduction (Arouses_Attention), Main_Points (Clarity, Exposition_Quality), Application (Clear_and_Practical), and Conclusion (Compelling_Exhortation, Climax).
+- Adjust scores if extraction misses or misrepresents significant vocal dynamics.
+- Do not penalize technical audio quality (background noise, mic issues); focus on homiletical content and delivery.
+
 {SCORING_RUBRICS}
 
 ### Scoring Guidance (Heuristic)
 
 Be a tough but fair grader. The goal is to help the preacher improve, not just to affirm. A score of 3 is not a failure; it is the baseline for a competent sermon with clear areas for growth. Do not award 4s or 5s lightly.
+
+**Calibration Check:** Gemini models often drift toward generosity (4s and 5s). You must actively resist this. A '3' is a success. A '5' is a rare feat. If you find yourself giving many 4s, pause and ask: "Is this truly better than the standard competent sermon?"
 
 Scoring scale (integers only; no 0, null, or N/A):
 1 — **Deficient**: Absent, inaccurate, misleading, or counter‑productive. A fundamental element is missing or flawed.
@@ -235,11 +248,53 @@ Key requirements (compliance checklist):
 
 Tie-breakers (to improve calibration):
 - When in doubt, default to the lower score. Challenge the sermon to earn a high score.
-- Use 3 as a true midpoint (adequate), not a soft pass. A sermon full of 3s is a sermon with significant potential for growth."""
+- Use 3 as a true midpoint (adequate), not a soft pass. A sermon full of 3s is a sermon with significant potential for growth.
+- **Evidence Requirement:** For every score other than 3, you must be able to point to specific evidence in the extraction."""
+
+# ------------------------- Multi-Run Harmonization Prompts -------------------------
+
+HARMONIZE_SYSTEM_PROMPT = """You are an expert homiletics meta-evaluator synthesizing feedback from multiple independent sermon assessments. Your role is to harmonize diverse perspectives into a single, concise, actionable coaching message that reflects majority consensus while noting meaningful minority insights. Be pastoral, constructive, and evidence-based."""
+
+HARMONIZE_INSTRUCTIONS = """You are harmonizing feedback from multiple independent sermon evaluators who scored the same sermon. Below you will find:
+1. The averaged integer scores (already computed) for each rubric sub-criterion
+2. Multiple feedback strings per rubric category from each evaluator
+3. Confidence scores from each evaluator
+
+Your task:
+- Synthesize a single concise feedback string per rubric category (Introduction, Proposition, Main_Points, etc.)
+- Reflect majority consensus where evaluators agree on key points
+- Note minority perspectives when they provide valuable nuance (e.g., "Most evaluators praised X, though one noted Y")
+- Weight insights implicitly by evaluator confidence scores—feedback from high-confidence runs (>0.8) should carry more weight
+- Prioritize actionable coaching over platitudes
+- Maintain a pastoral, constructive tone
+
+Output format:
+- Return a single JSON object matching the `SermonScoringStep2Raw` schema
+- Populate ONLY the text feedback fields (Feedback, Strengths, Growth_Areas, Next_Steps)
+- Leave integer score fields empty—they are already averaged
+- Do not include markdown, bullet lists outside the Strengths/Growth_Areas/Next_Steps arrays, or commentary outside the JSON
+
+Key principles (inspired by self-consistency literature):
+- Majority voting: If 2/3 evaluators agree on a specific critique or praise, make it prominent
+- Minority dissent: If 1/3 evaluators uniquely identify a valid concern, acknowledge it briefly
+- Confidence weighting: Subtly prioritize insights from runs with higher Scoring_Confidence (you'll see this in the input data)
+- **Bias toward the critical:** In subjective disagreements (e.g., one evaluator says "engaging" and another says "distracting"), the critical perspective often highlights a real friction point for listeners. Don't smooth it over; address it.
+
+Example synthesis:
+Input:
+- Run 1 (conf=0.9): "Proposition clear but could be more Christ-centered"
+- Run 2 (conf=0.7): "Proposition well-stated and governs points effectively"
+- Run 3 (conf=0.85): "Proposition is adequate but lacks gospel punch"
+
+Output Feedback: "Proposition is well-structured and governs the sermon effectively (consensus). However, two evaluators noted it could be more explicitly Christ-centered or gospel-oriented (minority but high-confidence insight). Next time, ensure the proposition directly references Christ's person or work where the text warrants."
+
+Do NOT include the averaged integer scores in your output—they are already computed. Focus solely on harmonizing the qualitative feedback."""
+
+# ------------------------- Aggregated Summary Feedback Prompts -------------------------
 
 AGG_SUMMARY_SYSTEM_PROMPT = """You are an executive homiletics coach. Combine rubric literacy with pastoral warmth to write concise, insight-rich explanations of aggregated sermon scores. Highlight concrete evidence from the scoring data, celebrate strength with specificity, and coach toward improvement without condemnation."""
 
-AGG_SUMMARY_INSTRUCTIONS = f"""Craft an executive summary that is both an evaluation and a coaching plan. Use the Step 1 extraction, Step 2 scoring, and the aggregated scores to provide specific, actionable feedback. The goal is to give the preacher concrete next steps for their next sermon.
+AGG_SUMMARY_INSTRUCTIONS = """Craft an executive summary that is both an evaluation and a coaching plan. Use the Step 1 extraction, Step 2 scoring, and the aggregated scores to provide specific, actionable feedback. The goal is to give the preacher concrete next steps for their next sermon.
 
 Output requirements:
 1. Return a single JSON object matching the `AggregatedSummaryFeedback` schema.
@@ -250,7 +305,7 @@ Output requirements:
 3. For the `Overall_Impact` field, do all of the following:
    - Explain the components that contributed to the score (e.g., "Textual Fidelity at 3.8 buoyed the composite, while Proposition Clarity at 2.9 dragged it down").
    - Close with one practical, highest‑leverage “next time” coaching move that would most improve the overall score.
-4. Maintain a pastoral, constructive tone. The feedback should feel like a partnership in the service of the Gospel, not a judgment.
+4. Maintain a pastoral, constructive tone. The feedback should feel like a partnership in the service of the Gospel, not a judgment. Ensure the tone is encouraging but uncompromising on truth.
 5. Use the actual numbers provided to you; keep decimals to two places.
 6. Do not include markdown, bullet lists, or commentary outside the JSON object.
 
@@ -259,13 +314,13 @@ Actionable Feedback Examples:
 - Use: "Illustrations scored 2.50, averaging 'Lived‑Body Detail' and 'Proportion.' Next time, tell one vivid story tied to your most crucial point rather than several brief anecdotes."
 
 - Instead of: "FCF was unclear."
-- Use: "FCF Identification was 2.00 (from 'FCF Introduced'). For your next outline, write the FCF at the top and ensure each main point explicitly advances its resolution in Christ."
+- Use: "Introduction was 2.00 (from 'FCF Introduced' and 'Arouses Attention'). For your next outline, write the FCF at the top and ensure each main point explicitly advances its resolution in Christ."
 
 Metric derivations reminder:
 * Textual_Fidelity ≈ avg(Exegetical Support.Alignment with Text, Handles Difficulties, Proof Accuracy & Clarity, Context & Genre Considered)
 * Proposition_Clarity ≈ avg(Proposition.Principle_and_Application_Wed, Proposition.Establishes_Main_Theme, Proposition.Summarizes_Introduction)
-* FCF_Identification ≈ Introduction.FCF_Introduced
+* Introduction ≈ avg(Introduction.FCF_Introduced, Introduction.Arouses_Attention)
 * Application_Effectiveness ≈ avg(Application.Clear_and_Practical, Application.Redemptive_Focus, Application.Mandate_vs_Idea_Distinction, Application.Passage_Supported, Main_Points.Application_Quality)
 * Structure_Cohesion ≈ avg(Main_Points.Proportional_and_Coexistent, Conclusion.Summary, Conclusion.Compelling_Exhortation, Conclusion.Climax, Conclusion.Pointed_End)
 * Illustrations ≈ avg(Main_Points.Illustration_Quality, Illustrations.Lived_Body_Detail, Illustrations.Strengthens_Points, Illustrations.Proportion)
-* Overall_Impact ≈ avg(Textual_Fidelity, Proposition_Clarity, Application_Effectiveness, Structure_Cohesion, Illustrations, FCF_Identification)"""
+* Overall_Impact ≈ avg(Textual_Fidelity, Proposition_Clarity, Application_Effectiveness, Structure_Cohesion, Illustrations, Introduction)"""

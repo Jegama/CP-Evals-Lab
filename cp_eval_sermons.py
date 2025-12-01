@@ -1,20 +1,22 @@
-"""Sermon Evaluation CLI (two-step, language-agnostic).
+"""Sermon Evaluation CLI (two-step, audio-only, language-agnostic).
 
 Usage examples:
-  # Step 1 + Step 2 from text transcript using OpenAI evaluator model
-  python cp_eval_sermons.py --mode text --provider openai --model gpt-5-mini \
-        --transcript resources/Example_of_other_sermon_evals/eval_colossians_3.18-21.md \
-        --out-dir data/sermons_evals --label col318-21 --preacher "David"
+  # Single-run evaluation
+  python cp_eval_sermons.py --model gemini-2.5-flash \
+        --audio data/sermons/Ephesians_4_7-16.mp3 --out-dir data/sermons_evals \
+        --label eph4_7-16 --preacher "Josh" --markdown
 
-  # Step 1 from audio and Step 2 using Gemini
-  python cp_eval_sermons.py --mode audio --provider gemini --model gemini-2.5-flash \
-        --audio data/sermons/Ephesians_4_7-16.mp3 --out-dir data/sermons_evals --label eph4_7-16 \
-        --preacher "Josh"
+  # Multi-run evaluation with self-consistency (3 parallel runs)
+  python cp_eval_sermons.py --model gemini-2.5-flash --num-scoring-runs 3 \
+        --audio data/sermons/Ephesians_4_7-16.mp3 --out-dir data/sermons_evals \
+        --label eph4_7-16_multi --preacher "Josh" --markdown
 
 Outputs:
   - step1 JSONL and step2 JSONL files under out-dir
-    - aggregated summary CSV grouped by preacher under out-dir
+  - aggregated summary CSV grouped by preacher under out-dir
+  - optional Markdown report (with --markdown flag)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,24 +25,51 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from parrot_ai.evaluation_schemas import SermonScoringStep2
+from parrot_ai.evaluation_schemas import SermonExtractionStep1, SermonScoringStep2
 from parrot_ai.sermon_evaluation import SermonEvaluationEngine
 from parrot_ai.sermon_markdown import render_markdown
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Two-step sermon evaluation")
-    p.add_argument("--mode", choices=["text", "audio"], default="text", help="Input mode: text transcript or audio (Gemini only)")
-    p.add_argument("--provider", choices=["openai", "gemini"], default="openai", help="Provider for evaluation prompts")
-    p.add_argument("--model", default="gpt-5-mini", help="Model to use for prompts (e.g., gpt-5-mini, gemini-2.5-flash)")
-    p.add_argument("--transcript", help="Path to sermon transcript (text or markdown) for --mode text")
-    p.add_argument("--audio", help="Path to sermon audio file for --mode audio (Gemini only)")
-    p.add_argument("--out-dir", default="data/sermons_evals", help="Output directory for JSONL artifacts")
-    p.add_argument("--label", required=True, help="Run label to tag outputs (e.g., eph2_11-13)")
-    p.add_argument("--md-file", help="Optional explicit Markdown output path; defaults to <out-dir>/<label>.md")
-    p.add_argument("--preacher", required=True, help="Name or identifier for the preacher being evaluated (stored in summary CSV)")
-    p.add_argument("--markdown", action="store_true", help="Also emit a human-friendly Markdown report")
+    p = argparse.ArgumentParser(description="Two-step sermon evaluation (audio-only)")
+    p.add_argument(
+        "--audio", required=True, help="Path to sermon audio file (mp3, wav, m4a)"
+    )
+    p.add_argument(
+        "--model",
+        default="gemini-2.5-flash",
+        help="Gemini model to use for evaluation (e.g., gemini-2.5-flash, gemini-2.0-flash-exp)",
+    )
+    p.add_argument(
+        "--out-dir",
+        default="data/sermons_evals",
+        help="Output directory for JSONL artifacts",
+    )
+    p.add_argument(
+        "--label", required=True, help="Run label to tag outputs (e.g., eph2_11-13)"
+    )
+    p.add_argument(
+        "--md-file",
+        help="Optional explicit Markdown output path; defaults to <out-dir>/<label>.md",
+    )
+    p.add_argument(
+        "--preacher",
+        required=True,
+        help="Name or identifier for the preacher being evaluated (stored in summary CSV)",
+    )
+    p.add_argument(
+        "--markdown",
+        action="store_true",
+        help="Also emit a human-friendly Markdown report",
+    )
+    p.add_argument(
+        "--num-scoring-runs",
+        type=int,
+        default=1,
+        help="Number of parallel scoring runs for self-consistency; default 1 (single run)",
+    )
     return p.parse_args(argv)
+
 
 def append_aggregated_summary_csv(
     csv_path: Path,
@@ -49,11 +78,20 @@ def append_aggregated_summary_csv(
     label: str,
     scoring: SermonScoringStep2,
     model: str,
+    extraction: SermonExtractionStep1 | None = None,
+    num_scoring_runs: int = 1,
 ) -> None:
     summary = getattr(scoring, "Aggregated_Summary", None)
     if summary is None:
         print("[warn] Aggregated summary missing; skipping CSV append.")
         return
+
+    # Calculate duration in minutes if available
+    duration_minutes = None
+    duration_penalty = None
+    if extraction and extraction.audio_duration:
+        duration_minutes = round(extraction.audio_duration / 60.0, 2)
+        duration_penalty = summary.duration_penalty
 
     fieldnames = [
         "timestamp",
@@ -62,11 +100,14 @@ def append_aggregated_summary_csv(
         "preacher",
         "Textual_Fidelity",
         "Proposition_Clarity",
-        "FCF_Identification",
+        "Introduction",
         "Application_Effectiveness",
         "Structure_Cohesion",
         "Illustrations",
         "Overall_Impact",
+        "audio_duration_minutes",
+        "duration_penalty",
+        "num_scoring_runs",
     ]
 
     row = {
@@ -76,11 +117,14 @@ def append_aggregated_summary_csv(
         "preacher": preacher.replace("_", " "),
         "Textual_Fidelity": summary.Textual_Fidelity,
         "Proposition_Clarity": summary.Proposition_Clarity,
-        "FCF_Identification": summary.FCF_Identification,
+        "Introduction": summary.Introduction,
         "Application_Effectiveness": summary.Application_Effectiveness,
         "Structure_Cohesion": summary.Structure_Cohesion,
         "Illustrations": summary.Illustrations,
         "Overall_Impact": summary.Overall_Impact,
+        "audio_duration_minutes": duration_minutes or "",
+        "duration_penalty": duration_penalty or "",
+        "num_scoring_runs": num_scoring_runs,
     }
 
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,29 +150,33 @@ def main(argv=None) -> int:
     step1_path = out_dir / f"{args.label}_step1_extraction.json"
     step2_path = out_dir / f"{args.label}_step2_scoring.json"
 
-    engine = SermonEvaluationEngine(provider=args.provider, model=args.model)
-    print(f"[init] Provider={args.provider} | Model={args.model} | Mode={args.mode}")
+    engine = SermonEvaluationEngine(model=args.model)
+    print(f"[init] Model={args.model} | Mode=audio | Runs={args.num_scoring_runs}")
 
-    # Step 1
-    if args.mode == "text":
-        if not args.transcript:
-            raise SystemExit("--transcript is required for --mode text")
-        transcript = read_text_file(args.transcript)
-        step1 = engine.extract_structure_from_text(transcript)
+    # Step 1: Extract from audio
+    _, audio_file_obj = engine.upload_or_get_gemini_file(args.audio)
+    step1 = engine.extract_structure_from_audio(args.audio)
+
+    if step1.audio_duration:
+        minutes = step1.audio_duration / 60.0
+        print(f"[info] Audio duration: {minutes:.2f} minutes")
     else:
-        if args.provider != "gemini":
-            raise SystemExit("Audio mode requires --provider gemini")
-        if not args.audio:
-            raise SystemExit("--audio is required for --mode audio")
-        step1 = engine.extract_structure_from_audio(args.audio)
+        print(
+            "[warn] Audio duration could not be extracted (check file format or 'mutagen' install)"
+        )
 
     # Save Step 1
     with step1_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(step1.model_dump(), ensure_ascii=False) + "\n")
     print(f"[write] Step 1 extraction -> {step1_path}")
 
-    # Step 2
-    step2 = engine.score_from_extraction(step1)
+    # Step 2 (multi-run if requested, else single run)
+    if args.num_scoring_runs > 1:
+        step2 = engine.score_from_extraction_multi_run(
+            step1, audio_file_obj=audio_file_obj, num_runs=args.num_scoring_runs
+        )
+    else:
+        step2 = engine.score_from_extraction(step1, audio_file_obj=audio_file_obj)
     with step2_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(step2.model_dump(), ensure_ascii=False) + "\n")
     print(f"[write] Step 2 scoring -> {step2_path}")
@@ -141,11 +189,19 @@ def main(argv=None) -> int:
         label=args.label,
         scoring=step2,
         model=args.model,
+        extraction=step1,
+        num_scoring_runs=args.num_scoring_runs,
     )
 
     # Optional Markdown report
     if args.markdown:
-        md = render_markdown(step1, step2, label=args.label, model=args.model)
+        md = render_markdown(
+            step1,
+            step2,
+            label=args.label,
+            model=args.model,
+            num_scoring_runs=args.num_scoring_runs,
+        )
         md_path = Path(args.md_file) if args.md_file else out_dir / f"{args.label}.md"
         md_path.write_text(md, encoding="utf-8")
         print(f"[write] Markdown report -> {md_path}")

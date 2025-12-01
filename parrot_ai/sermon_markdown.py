@@ -3,6 +3,7 @@
 Produces a concise, human-friendly report combining Step 1 extraction and
 Step 2 scoring, including Aggregated Summary roll-ups.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -25,9 +26,34 @@ def render_markdown(
     label: Optional[str] = None,
     provider: Optional[str] = None,
     model: Optional[str] = None,
+    num_scoring_runs: int = 1,
 ) -> str:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    title = f"Sermon Evaluation Report — {label}" if label else "Sermon Evaluation Report"
+    title = (
+        f"Sermon Evaluation Report — {label}" if label else "Sermon Evaluation Report"
+    )
+
+    # Duration Analysis (if available)
+    duration_md = ""
+    if extraction.audio_duration is not None:
+        duration_minutes = round(extraction.audio_duration / 60.0, 2)
+        penalty_text = ""
+        if (
+            scoring.Aggregated_Summary
+            and scoring.Aggregated_Summary.duration_penalty is not None
+        ):
+            penalty = scoring.Aggregated_Summary.duration_penalty
+            penalty_text = f" (penalty applied: {penalty:.2f})"
+        duration_md = (
+            f"\n**Audio Duration:** {duration_minutes} minutes{penalty_text}\n"
+        )
+
+    # Evaluation Methodology (if multi-run)
+    methodology_md = ""
+    if num_scoring_runs > 1:
+        methodology_md = f"""
+**Evaluation Methodology:** This sermon was evaluated using {num_scoring_runs} independent scoring runs with confidence-weighted harmonization. Each run used a different random seed to reduce bias. Final scores represent confidence-weighted averages, and feedback was synthesized by a meta-evaluator LLM to capture consensus insights while noting minority perspectives.
+"""
 
     # Aggregated Summary (if present)
     agg_md = ""
@@ -46,18 +72,18 @@ def render_markdown(
         agg_md = f"""
 ## Aggregated Summary
 
-| Metric | Score | Feedback |
-|---|---:|---|
-| Textual Fidelity | {a.Textual_Fidelity} | {_agg_fb('Textual_Fidelity')} |
-| Proposition Clarity | {a.Proposition_Clarity} | {_agg_fb('Proposition_Clarity')} |
-| FCF Identification | {a.FCF_Identification} | {_agg_fb('FCF_Identification')} |
-| Application Effectiveness | {a.Application_Effectiveness} | {_agg_fb('Application_Effectiveness')} |
-| Structure Cohesion | {a.Structure_Cohesion} | {_agg_fb('Structure_Cohesion')} |
-| Illustrations | {a.Illustrations} | {_agg_fb('Illustrations')} |
-
 **Overall Impact: {a.Overall_Impact}**
 
 {overall_fb}
+{duration_md}
+| Metric | Score | Feedback |
+|---|---:|---|
+| Textual Fidelity | {a.Textual_Fidelity} | {_agg_fb("Textual_Fidelity")} |
+| Proposition Clarity | {a.Proposition_Clarity} | {_agg_fb("Proposition_Clarity")} |
+| Introduction | {a.Introduction} | {_agg_fb("Introduction")} |
+| Application Effectiveness | {a.Application_Effectiveness} | {_agg_fb("Application_Effectiveness")} |
+| Structure Cohesion | {a.Structure_Cohesion} | {_agg_fb("Structure_Cohesion")} |
+| Illustrations | {a.Illustrations} | {_agg_fb("Illustrations")} |
 """.strip()
 
     # Step 1: Structure
@@ -68,16 +94,16 @@ def render_markdown(
         apps = "\n".join([f"  * {s}" for s in (p.Application or [])])
         points_md_lines.append(
             f"""
-### {idx}. {p.Point}{f' ({p.Verses})' if p.Verses else ''}
+### {idx}. {p.Point}{f" ({p.Verses})" if p.Verses else ""}
 
 Summary: {p.Summary}
 
 * Subpoints:
-{subpoints or '  * (none)'}
+{subpoints or "  * (none)"}
 * Illustrations:
-{illus or '  * (none)'}
+{illus or "  * (none)"}
 * Applications:
-{apps or '  * (none)'}
+{apps or "  * (none)"}
 
 Comments: {_fmt_opt(p.Comments)}
 
@@ -87,8 +113,12 @@ Feedback: {_fmt_opt(p.Feedback)}
     points_md = "\n\n".join(points_md_lines)
 
     # Scoring breakdown (compact per category)
-    def cat_table(title: str, mapping: dict, overall: int, feedback: Optional[str]) -> str:
-        rows = "\n".join([f"| {k.replace('_', ' ')} | {v} |" for k, v in mapping.items()])
+    def cat_table(
+        title: str, mapping: dict, overall: int, feedback: Optional[str]
+    ) -> str:
+        rows = "\n".join(
+            [f"| {k.replace('_', ' ')} | {v} |" for k, v in mapping.items()]
+        )
         return f"""
 ### {title}
 
@@ -145,28 +175,67 @@ Feedback: {_fmt_opt(feedback)}
 
     scoring_md = "\n\n".join(
         [
-            cat_table("Introduction", intro_map, scoring.Introduction.Overall, scoring.Introduction.Feedback),
-            cat_table("Proposition", prop_map, scoring.Proposition.Overall, scoring.Proposition.Feedback),
-            cat_table("Main Points", mp_map, scoring.Main_Points.Overall, scoring.Main_Points.Feedback),
-            cat_table("Exegetical Support", exg_map, scoring.Exegetical_Support.Overall, scoring.Exegetical_Support.Feedback),
-            cat_table("Application", app_map, scoring.Application.Overall, scoring.Application.Feedback),
-            cat_table("Illustrations", ill_map, scoring.Illustrations.Overall, scoring.Illustrations.Feedback),
-            cat_table("Conclusion", con_map, scoring.Conclusion.Overall, scoring.Conclusion.Feedback),
+            cat_table(
+                "Introduction",
+                intro_map,
+                scoring.Introduction.Overall,
+                scoring.Introduction.Feedback,
+            ),
+            cat_table(
+                "Proposition",
+                prop_map,
+                scoring.Proposition.Overall,
+                scoring.Proposition.Feedback,
+            ),
+            cat_table(
+                "Main Points",
+                mp_map,
+                scoring.Main_Points.Overall,
+                scoring.Main_Points.Feedback,
+            ),
+            cat_table(
+                "Exegetical Support",
+                exg_map,
+                scoring.Exegetical_Support.Overall,
+                scoring.Exegetical_Support.Feedback,
+            ),
+            cat_table(
+                "Application",
+                app_map,
+                scoring.Application.Overall,
+                scoring.Application.Feedback,
+            ),
+            cat_table(
+                "Illustrations",
+                ill_map,
+                scoring.Illustrations.Overall,
+                scoring.Illustrations.Feedback,
+            ),
+            cat_table(
+                "Conclusion",
+                con_map,
+                scoring.Conclusion.Overall,
+                scoring.Conclusion.Feedback,
+            ),
         ]
     )
 
-    strengths_md = "\n".join([f"* {s}" for s in (scoring.Strengths or [])]) or "* (none)"
-    growth_md = "\n".join([f"* {s}" for s in (scoring.Growth_Areas or [])]) or "* (none)"
+    strengths_md = (
+        "\n".join([f"* {s}" for s in (scoring.Strengths or [])]) or "* (none)"
+    )
+    growth_md = (
+        "\n".join([f"* {s}" for s in (scoring.Growth_Areas or [])]) or "* (none)"
+    )
     next_md = "\n".join([f"* {s}" for s in (scoring.Next_Steps or [])]) or "* (none)"
 
     md = f"""
 # {title}
 
 Generated: {ts}  
-Model: {model or '-'}  
+Model: {model or "-"}  
 Extraction Confidence: {extraction.Extraction_Confidence}  
 Scoring Confidence: {scoring.Scoring_Confidence}
-
+{methodology_md}
 {agg_md}
 
 ### Strengths
