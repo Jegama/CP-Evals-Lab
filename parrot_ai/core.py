@@ -31,6 +31,7 @@ from huggingface_hub import InferenceClient
 from typing import Any, cast, Optional
 from contextlib import suppress
 
+
 # --- Prompt module loader -------------------------------------------------
 def _load_prompts(language: str):
     """Import the prompt module for a given language or raise a clear error.
@@ -59,6 +60,7 @@ class LocalModelParrotAI:
     The class defers importing heavy libraries until ``load_model`` is called to
     keep ``import parrot_ai`` light for users who only need API-backed flows.
     """
+
     def __init__(self, language: str = "arabic"):
         self.model = None
         self.tokenizer = None
@@ -125,7 +127,9 @@ class LocalModelParrotAI:
         Returns only the assistant reply text.
         """
         if self.model is None or self.tokenizer is None or self._torch is None:
-            raise ValueError("Model not loaded. Call load_model() first (requires torch).")
+            raise ValueError(
+                "Model not loaded. Call load_model() first (requires torch)."
+            )
 
         # Resolve system prompt: ONLY include a system message if caller explicitly supplied
         # one (``system`` not None). If they pass an empty string we still omit it. This
@@ -158,7 +162,7 @@ class LocalModelParrotAI:
                 pad_token_id=self.tokenizer.eos_token_id,
             )
 
-        reply_ids = gen_ids[0, inputs.input_ids.shape[1]:]
+        reply_ids = gen_ids[0, inputs.input_ids.shape[1] :]
         return self.tokenizer.decode(reply_ids, skip_special_tokens=True)
 
     def is_loaded(self) -> bool:
@@ -172,33 +176,44 @@ class LocalModelParrotAI:
             f"Model Name: {self.model_name}",
         ]
         try:
-            info_lines.append(f"Memory Footprint: {self.model.get_memory_footprint() / 1e9:.2f} GB")
+            info_lines.append(
+                f"Memory Footprint: {self.model.get_memory_footprint() / 1e9:.2f} GB"
+            )
             info_lines.append(f"Total Parameters: {self.model.num_parameters():,}")
-            info_lines.append(f"Trainable Parameters: {self.model.num_parameters(only_trainable=True):,}")
+            info_lines.append(
+                f"Trainable Parameters: {self.model.num_parameters(only_trainable=True):,}"
+            )
         except Exception:  # noqa: BLE001
             pass
-        cfg = getattr(self.model, 'config', None)
+        cfg = getattr(self.model, "config", None)
         for attr in [
-            'model_type','hidden_size','num_hidden_layers','num_attention_heads',
-            'vocab_size','max_position_embeddings'
+            "model_type",
+            "hidden_size",
+            "num_hidden_layers",
+            "num_attention_heads",
+            "vocab_size",
+            "max_position_embeddings",
         ]:
             if cfg is not None and hasattr(cfg, attr):
-                info_lines.append(f"{attr.replace('_',' ').title()}: {getattr(cfg, attr)}")
+                info_lines.append(
+                    f"{attr.replace('_', ' ').title()}: {getattr(cfg, attr)}"
+                )
         try:
             device = next(self.model.parameters()).device
             dtype = next(self.model.parameters()).dtype
             info_lines.extend([f"Device: {device}", f"Data Type: {dtype}"])
         except Exception:  # noqa: BLE001
             pass
-        if getattr(self.model, 'is_quantized', False):
+        if getattr(self.model, "is_quantized", False):
             info_lines.append("Quantization: 4-bit (BitsAndBytes)")
-        if getattr(self.model, 'can_generate', lambda: False)():
+        if getattr(self.model, "can_generate", lambda: False)():
             info_lines.append("Generation: Supported")
         return "\n".join(info_lines)
 
+
 class BaseParrotAI:
     """Base class for API-based ParrotAI implementations with shared functionality."""
-    
+
     def __init__(self, language: str = "arabic"):
         """Initialize base ParrotAI with common attributes."""
         load_dotenv()
@@ -206,12 +221,12 @@ class BaseParrotAI:
         self.language = language
         self.prompts = _load_prompts(language)
         self._client = None
-    
+
     def set_model(self, model_name: str):
         """Set the model to use for generation."""
         self.model_name = model_name
         print(f"Model set to: {model_name}")
-    
+
     def _build_messages(self, prompt: str, system: Optional[str] = None):
         """Build messages array for API calls."""
         # Only use a system prompt if explicitly provided. If callers want the default
@@ -226,15 +241,21 @@ class BaseParrotAI:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         return messages
-    
+
     def is_loaded(self) -> bool:
         """Check if the API client is initialized."""
         return self._client is not None
-    
-    def generate(self, prompt: str, system: Optional[str] = None, model: Optional[str] = None, **kwargs) -> str:
+
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        model: Optional[str] = None,
+        **kwargs,
+    ) -> str:
         """Generate text using the API. Must be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement generate method")
-    
+
     def get_model_info(self) -> str:
         """Get information about the current configuration. Must be implemented by subclasses."""
         raise NotImplementedError("Subclasses must implement get_model_info method")
@@ -242,23 +263,20 @@ class BaseParrotAI:
 
 class ParrotAIHF(BaseParrotAI):
     """HuggingFace API wrapper for text generation."""
-    
+
     def __init__(self, provider: str = "nebius", language: str = "arabic"):
         """Initialize ParrotAIHF instance with HuggingFace API client."""
         super().__init__(language)
-        
+
         # Get HF token from environment
         hf_token = os.environ.get("HF_TOKEN")
         if not hf_token:
             raise ValueError("HF_TOKEN must be set in environment variables")
-        
-        self._client = InferenceClient(
-            api_key=hf_token,
-            provider=cast(Any, provider)
-        )
+
+        self._client = InferenceClient(api_key=hf_token, provider=cast(Any, provider))
         self.provider = provider
         print("HuggingFace API client initialized")
-    
+
     def generate(
         self,
         prompt: str,
@@ -267,7 +285,7 @@ class ParrotAIHF(BaseParrotAI):
         max_tokens: int = 1024,
         temperature: float = 0.1,
         top_p: float = 0.9,
-        **kwargs
+        **kwargs,
     ) -> str:
         """Generate text using HuggingFace API."""
         model_to_use = model or self.model_name or "google/gemma-3-27b-it"
@@ -280,19 +298,21 @@ class ParrotAIHF(BaseParrotAI):
             temperature=temperature,
             top_p=top_p,
         )
-        
+
         return completion.choices[0].message.content or ""
-    
+
     def get_model_info(self) -> str:
         """Get information about the current configuration."""
         if not self.is_loaded():
             return "API client not initialized"
-        
-        return "\n".join([
-            f"Provider: {self.provider}",
-            f"Current Model: {self.model_name or 'Not set (will use default)'}",
-            "Type: HuggingFace API Client",
-        ])
+
+        return "\n".join(
+            [
+                f"Provider: {self.provider}",
+                f"Current Model: {self.model_name or 'Not set (will use default)'}",
+                "Type: HuggingFace API Client",
+            ]
+        )
 
 
 class ParrotAIOpenAI(BaseParrotAI):
@@ -303,7 +323,9 @@ class ParrotAIOpenAI(BaseParrotAI):
         try:
             from openai import OpenAI  # type: ignore
         except ImportError as e:  # pragma: no cover
-            raise ImportError("openai package not installed. Add it to requirements.txt") from e
+            raise ImportError(
+                "openai package not installed. Add it to requirements.txt"
+            ) from e
         if not os.environ.get("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY must be set in environment variables")
         self._client = OpenAI()
@@ -314,25 +336,24 @@ class ParrotAIOpenAI(BaseParrotAI):
         prompt: str,
         system: Optional[str] = None,
         model: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ) -> str:
         model_to_use = model or self.model_name or "gpt-5-mini"
         messages = self._build_messages(prompt, system)
-        
-        resp = self._client.responses.create(
-            model=model_to_use,
-            input=messages
-        )
-        answer = getattr(resp, 'output_text', "")
-        
+
+        resp = self._client.responses.create(model=model_to_use, input=messages)
+        answer = getattr(resp, "output_text", "")
+
         return answer
 
     def get_model_info(self) -> str:
-        return "\n".join([
-            "Provider: openai",
-            f"Current Model: {self.model_name or 'Not set (will use default)'}",
-            "Type: OpenAI Chat Completions Client",
-        ])
+        return "\n".join(
+            [
+                "Provider: openai",
+                f"Current Model: {self.model_name or 'Not set (will use default)'}",
+                "Type: OpenAI Chat Completions Client",
+            ]
+        )
 
     # Structured output using Pydantic schema
     def generate_structured(
@@ -370,7 +391,9 @@ class ParrotAITogether(BaseParrotAI):
         try:
             from together import Together  # type: ignore
         except ImportError as e:  # pragma: no cover
-            raise ImportError("together package not installed. Add it to requirements.txt") from e
+            raise ImportError(
+                "together package not installed. Add it to requirements.txt"
+            ) from e
         if not os.environ.get("TOGETHER_API_KEY"):
             raise ValueError("TOGETHER_API_KEY must be set in environment variables")
         self._client = Together()
@@ -381,32 +404,34 @@ class ParrotAITogether(BaseParrotAI):
         prompt: str,
         system: Optional[str] = None,
         model: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ) -> str:
         model_to_use = model or self.model_name or "google/gemma-3-12b-it"
         messages = self._build_messages(prompt, system)
-        
+
         completion = self._client.chat.completions.create(
             model=model_to_use,
             messages=messages,
         )
         with suppress(Exception):
             # Together returns similar structure with choices
-            choices = getattr(completion, 'choices', None)
+            choices = getattr(completion, "choices", None)
             if choices:
-                msg = getattr(choices[0], 'message', None)
+                msg = getattr(choices[0], "message", None)
                 if msg:
-                    content = getattr(msg, 'content', '')
+                    content = getattr(msg, "content", "")
                     if isinstance(content, str):
                         return content
         return ""
 
     def get_model_info(self) -> str:
-        return "\n".join([
-            "Provider: together",
-            f"Current Model: {self.model_name or 'Not set (will use default)'}",
-            "Type: Together AI Chat Completions Client",
-        ])
+        return "\n".join(
+            [
+                "Provider: together",
+                f"Current Model: {self.model_name or 'Not set (will use default)'}",
+                "Type: Together AI Chat Completions Client",
+            ]
+        )
 
 
 class ParrotAIGemini(BaseParrotAI):
@@ -418,10 +443,12 @@ class ParrotAIGemini(BaseParrotAI):
             from google import genai  # type: ignore
             from google.genai import types  # type: ignore
         except ImportError as e:  # pragma: no cover
-            raise ImportError("google-genai package not installed. Add it to requirements.txt") from e
+            raise ImportError(
+                "google-genai package not installed. Add it to requirements.txt"
+            ) from e
         if not os.environ.get("GEMINI_API_KEY"):
             raise ValueError("GEMINI_API_KEY must be set in environment variables")
-        
+
         self._client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
         self._types = types
         print("Gemini client initialized")
@@ -431,26 +458,24 @@ class ParrotAIGemini(BaseParrotAI):
         prompt: str,
         system: Optional[str] = None,
         model: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ) -> str:
         model_to_use = model or self.model_name or "gemini-2.5-flash"
-        
+
         # Only apply system prompt if explicitly supplied
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:
             system_prompt = ""
-        
+
         config = self._types.GenerateContentConfig()
         if system_prompt:
             config.system_instruction = system_prompt
-            
+
         response = self._client.models.generate_content(
-            model=model_to_use,
-            contents=prompt,
-            config=config
+            model=model_to_use, contents=prompt, config=config
         )
-        
+
         return response.text or ""
 
     # --- Files API helpers ---
@@ -461,7 +486,11 @@ class ParrotAIGemini(BaseParrotAI):
     def get_file(self, file_name_or_id: str):
         """Retrieve a previously uploaded file object by name/id (e.g., 'files/abc123')."""
         # The google-genai client expects the 'name' parameter in the format 'files/<id>'
-        name = file_name_or_id if str(file_name_or_id).startswith("files/") else f"files/{file_name_or_id}"
+        name = (
+            file_name_or_id
+            if str(file_name_or_id).startswith("files/")
+            else f"files/{file_name_or_id}"
+        )
         return self._client.files.get(name=name)
 
     def generate_with_contents(
@@ -488,11 +517,13 @@ class ParrotAIGemini(BaseParrotAI):
         return response.text or ""
 
     def get_model_info(self) -> str:
-        return "\n".join([
-            "Provider: gemini",
-            f"Current Model: {self.model_name or 'Not set (will use default)'}",
-            "Type: Google Gemini API Client",
-        ])
+        return "\n".join(
+            [
+                "Provider: gemini",
+                f"Current Model: {self.model_name or 'Not set (will use default)'}",
+                "Type: Google Gemini API Client",
+            ]
+        )
 
     # Structured JSON using response_schema (Pydantic model class)
     def generate_structured(
@@ -571,10 +602,12 @@ class ParrotAIGrok(BaseParrotAI):
             from xai_sdk import Client  # type: ignore
             from xai_sdk.chat import user, system  # type: ignore
         except ImportError as e:  # pragma: no cover
-            raise ImportError("xai-sdk package not installed. Add it to requirements.txt") from e
+            raise ImportError(
+                "xai-sdk package not installed. Add it to requirements.txt"
+            ) from e
         if not os.environ.get("XAI_API_KEY"):
             raise ValueError("XAI_API_KEY must be set in environment variables")
-        
+
         self._client = Client(
             api_key=os.environ.get("XAI_API_KEY"),
             timeout=3600,
@@ -588,26 +621,28 @@ class ParrotAIGrok(BaseParrotAI):
         prompt: str,
         system: Optional[str] = None,
         model: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ) -> str:
         model_to_use = model or self.model_name or "grok-3-mini"
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:
             system_prompt = ""
-        
+
         chat = self._client.chat.create(model=model_to_use)
-        
+
         if system_prompt:
             chat.append(self._system(system_prompt))
         chat.append(self._user(prompt))
-        
+
         response = chat.sample()
         return response.content
 
     def get_model_info(self) -> str:
-        return "\n".join([
-            "Provider: grok",
-            f"Current Model: {self.model_name or 'Not set (will use default)'}",
-            "Type: xAI Grok API Client",
-        ])
+        return "\n".join(
+            [
+                "Provider: grok",
+                f"Current Model: {self.model_name or 'Not set (will use default)'}",
+                "Type: xAI Grok API Client",
+            ]
+        )

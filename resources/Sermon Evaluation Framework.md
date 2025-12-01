@@ -236,11 +236,11 @@ Tie‑breakers:
 Compute rolled‑up composite categories for dashboards by averaging related raw scores:
 * Textual_Fidelity ≈ avg(Exegetical Support.Alignment with Text, Handles Difficulties, Proof Accuracy & Clarity, Context & Genre Considered)
 * Proposition_Clarity ≈ avg(Proposition.Principle + Application Wed, Establishes Main Theme, Summarizes Introduction)
-* FCF_Identification ≈ Introduction.FCF Introduced (optionally cross‑checked against Step 1 FCF extraction)
+* Introduction ≈ avg(Introduction.FCF Introduced, Introduction.Arouses Attention)
 * Application_Effectiveness ≈ avg(Application.Clear & Practical, Redemptive Focus, Mandate vs Idea Distinction, Passage Supported, Main Points.Application Quality)
 * Structure_Cohesion ≈ avg(Main Points.Proportional & Coexistent, Conclusion.Summary, Conclusion.Compelling Exhortation, Conclusion.Climax, Conclusion.Pointed End)
 * Illustrations ≈ avg(Main Points.Illustration Quality, Illustrations.Lived-Body Detail, Illustrations.Strengthens Points, Illustrations.Proportion)
-* Overall_Impact ≈ avg(Textual_Fidelity, Proposition_Clarity, Application_Effectiveness, Structure_Cohesion, Illustrations, FCF_Identification).
+* Overall_Impact ≈ avg(Textual_Fidelity, Proposition_Clarity, Application_Effectiveness, Structure_Cohesion, Illustrations, Introduction).
 
 ---
 
@@ -314,7 +314,7 @@ Each top‑level category contains its sub‑criteria as keys with spaces. Feedb
 | --------------------- | ----- |
 | Textual_Fidelity | 4.25 |
 | Proposition_Clarity | 5.0 |
-| FCF_Identification | 5 |
+| Introduction | 4.5 |
 | Application_Effectiveness | 3.6 |
 | Structure_Cohesion | 4.2 |
 | Illustrations | 3.7 |
@@ -552,7 +552,7 @@ NOTE: Keys intentionally contain spaces for readability (valid in JSON). Downstr
 	"Aggregated": {
 		"Textual_Fidelity": 0.0,
 		"Proposition_Clarity": 0.0,
-		"FCF_Identification": 0.0,
+		"Introduction": 0.0,
 		"Application_Effectiveness": 0.0,
 		"Structure_Cohesion": 0.0,
 		"Illustrations": 0.0,

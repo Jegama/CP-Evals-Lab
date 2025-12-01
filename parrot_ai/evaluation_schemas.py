@@ -1,11 +1,9 @@
-"""Pydantic schema models for evaluation results.
+"""Pydantic schema models for evaluation results."""
 
-Separated from ``llm_evaluation`` during refactor so they can be imported
-without pulling in OpenAI / provider logic.
-"""
 from __future__ import annotations
 from typing import Optional, List
 from pydantic import BaseModel, Field
+
 
 class AdherenceModel(BaseModel):
     Core: int
@@ -15,6 +13,7 @@ class AdherenceModel(BaseModel):
     Consistency: int
     Overall: int
 
+
 class KindnessGentlenessModel(BaseModel):
     Core_Clarity_with_Kindness: int
     Pastoral_Sensitivity: int
@@ -23,12 +22,14 @@ class KindnessGentlenessModel(BaseModel):
     Tone: int
     Overall: int
 
+
 class InterfaithSensitivityModel(BaseModel):
     Respect_and_Handling_Objections: int
     Objection_Acknowledgement: int
     Evangelism: int
     Gospel_Boldness: int
     Overall: int
+
 
 class ArabicAccuracyDetailed(BaseModel):  # Arabic only
     Grammar_and_Syntax: int
@@ -39,18 +40,22 @@ class ArabicAccuracyDetailed(BaseModel):  # Arabic only
     Penalty_Reason: Optional[str] = None
     Overall: int
 
+
 class EvaluationResultArabic(BaseModel):
     Adherence: AdherenceModel
     Kindness_and_Gentleness: KindnessGentlenessModel
     Interfaith_Sensitivity: InterfaithSensitivityModel
     Arabic_Accuracy: ArabicAccuracyDetailed
 
+
 class EvaluationResultEnglish(BaseModel):
     Adherence: AdherenceModel
     Kindness_and_Gentleness: KindnessGentlenessModel
     Interfaith_Sensitivity: InterfaithSensitivityModel
 
+
 # ---------------- Sermon Evaluation Schemas (language-agnostic) ---------------- #
+
 
 class SermonPoint(BaseModel):
     Point: str
@@ -62,17 +67,21 @@ class SermonPoint(BaseModel):
     Comments: Optional[str] = None
     Feedback: Optional[str] = None
 
+
 class SermonGeneralComments(BaseModel):
     Content_Comments: Optional[str] = None
     Structure_Comments: Optional[str] = None
     Explanation_Comments: Optional[str] = None
 
+
 class SermonFCF(BaseModel):
     FCF: str
     Comments: Optional[str] = None
 
+
 class SermonExtractionStep1(BaseModel):
     """Step 1 – Descriptive Extraction (Structural Analysis)."""
+
     Scripture_Introduction: str
     Sermon_Introduction: str
     Proposition: str
@@ -81,6 +90,10 @@ class SermonExtractionStep1(BaseModel):
     General_Comments: SermonGeneralComments
     Fallen_Condition_Focus: SermonFCF
     Extraction_Confidence: float
+    audio_duration: Optional[float] = (
+        None  # Duration in seconds (populated for audio mode)
+    )
+
 
 class IntroductionScores(BaseModel):
     FCF_Introduced: int
@@ -88,12 +101,14 @@ class IntroductionScores(BaseModel):
     Overall: int
     Feedback: Optional[str] = None
 
+
 class PropositionScores(BaseModel):
     Principle_and_Application_Wed: int
     Establishes_Main_Theme: int
     Summarizes_Introduction: int
     Overall: int
     Feedback: Optional[str] = None
+
 
 class MainPointsScores(BaseModel):
     Clarity: int
@@ -105,6 +120,7 @@ class MainPointsScores(BaseModel):
     Overall: int
     Feedback: Optional[str] = None
 
+
 class ExegeticalSupportScores(BaseModel):
     Alignment_with_Text: int
     Handles_Difficulties: int
@@ -115,6 +131,7 @@ class ExegeticalSupportScores(BaseModel):
     Overall: int
     Feedback: Optional[str] = None
 
+
 class ApplicationScores(BaseModel):
     Clear_and_Practical: int
     Redemptive_Focus: int
@@ -123,12 +140,14 @@ class ApplicationScores(BaseModel):
     Overall: int
     Feedback: Optional[str] = None
 
+
 class IllustrationsScores(BaseModel):
     Lived_Body_Detail: int
     Strengthens_Points: int
     Proportion: int
     Overall: int
     Feedback: Optional[str] = None
+
 
 class ConclusionScores(BaseModel):
     Summary: int
@@ -138,32 +157,41 @@ class ConclusionScores(BaseModel):
     Overall: int
     Feedback: Optional[str] = None
 
+
 class AggregatedSummary(BaseModel):
     """Computed rollups per Sermon Evaluation Framework.
 
     All values are 1–5 floats rounded to two decimals.
     """
+
     Textual_Fidelity: float
     Proposition_Clarity: float
-    FCF_Identification: float
+    Introduction: float
     Application_Effectiveness: float
     Structure_Cohesion: float
     Illustrations: float
     Overall_Impact_Base: float
     Overall_Impact: float
+    duration_penalty: Optional[float] = (
+        None  # Penalty applied for <35min or >50min (0.0-1.0)
+    )
+
 
 class AggregatedSummaryFeedback(BaseModel):
     """Feedback for the aggregated summary scores."""
+
     Textual_Fidelity: Optional[str] = None
     Proposition_Clarity: Optional[str] = None
-    FCF_Identification: Optional[str] = None
+    Introduction: Optional[str] = None
     Application_Effectiveness: Optional[str] = None
     Structure_Cohesion: Optional[str] = None
     Illustrations: Optional[str] = None
     Overall_Impact: Optional[str] = None
 
+
 class SermonScoringStep2(BaseModel):
     """Step 2 – Analytical Scoring (Synthesis & Coaching)."""
+
     Introduction: IntroductionScores
     Proposition: PropositionScores
     Main_Points: MainPointsScores
@@ -178,8 +206,10 @@ class SermonScoringStep2(BaseModel):
     Aggregated_Summary: Optional[AggregatedSummary] = None
     Aggregated_Summary_Feedback: Optional[AggregatedSummaryFeedback] = None
 
+
 class SermonScoringStep2Raw(BaseModel):
     """Model used for LLM output only (no aggregates)."""
+
     Introduction: IntroductionScores
     Proposition: PropositionScores
     Main_Points: MainPointsScores
@@ -192,27 +222,28 @@ class SermonScoringStep2Raw(BaseModel):
     Next_Steps: List[str] = Field(default_factory=list)
     Scoring_Confidence: float
 
+
 __all__ = [
-    'AdherenceModel',
-    'KindnessGentlenessModel',
-    'InterfaithSensitivityModel',
-    'ArabicAccuracyDetailed',
-    'EvaluationResultArabic',
-    'EvaluationResultEnglish',
+    "AdherenceModel",
+    "KindnessGentlenessModel",
+    "InterfaithSensitivityModel",
+    "ArabicAccuracyDetailed",
+    "EvaluationResultArabic",
+    "EvaluationResultEnglish",
     # Sermon
-    'SermonPoint',
-    'SermonGeneralComments',
-    'SermonFCF',
-    'SermonExtractionStep1',
-    'IntroductionScores',
-    'PropositionScores',
-    'MainPointsScores',
-    'ExegeticalSupportScores',
-    'ApplicationScores',
-    'IllustrationsScores',
-    'ConclusionScores',
-    'SermonScoringStep2',
-    'SermonScoringStep2Raw',
-    'AggregatedSummary',
-    'AggregatedSummaryFeedback',
+    "SermonPoint",
+    "SermonGeneralComments",
+    "SermonFCF",
+    "SermonExtractionStep1",
+    "IntroductionScores",
+    "PropositionScores",
+    "MainPointsScores",
+    "ExegeticalSupportScores",
+    "ApplicationScores",
+    "IllustrationsScores",
+    "ConclusionScores",
+    "SermonScoringStep2",
+    "SermonScoringStep2Raw",
+    "AggregatedSummary",
+    "AggregatedSummaryFeedback",
 ]
