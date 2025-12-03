@@ -196,13 +196,14 @@ Produce only the final English answer (no preamble like "Here is the answer").""
 
 # ---------------- Evaluation Constants (English) ---------------- #
 
-DOCTRINE_TIER_DEFINITIONS = """Doctrine Tier Definitions (reference only – do NOT output):
-Core: Trinity; deity & humanity of Christ; incarnation & virgin birth; substitutionary atonement; bodily resurrection; justification by grace through faith in Christ alone; authority of Scripture; Christ's return & final judgment.
-Secondary: Baptism mode/subjects; church governance; Lord's Supper view; spiritual gifts (cessationist/continuationist); role of women (complementarian/egalitarian discussions); sanctification models; continuity/discontinuity frameworks; perseverance/security of salvation; atonement theory nuances.
-Tertiary: Eschatology timing views; worship style; creation age models; counseling approaches; Christian liberty matters; non‑essential interpretive disputes.
+DOCTRINE_TIER_DEFINITIONS = """Doctrine Tier Definitions (reference only - do NOT output):
+Core: Trinity; deity and humanity of Christ; incarnation and virgin birth; substitutionary atonement; bodily resurrection; justification by grace through faith in Christ alone; authority of Scripture; Christ's return and final judgment.
+Secondary: Baptism mode and subjects (for example, believer's baptism vs. infant baptism); church governance (congregational, presbyterian, episcopal); Lord's Supper perspectives on Christ's presence in communion (symbolic, spiritual, real presence); spiritual gifts (continuation or cessation); sanctification perspectives; continuity and discontinuity between Old and New Testaments (covenant theology, dispensationalism); security of salvation (perseverance of the saints or loss of salvation); atonement theories (penal substitution, Christus Victor, moral influence).
+Tertiary: Eschatology views (premillennialism, amillennialism, postmillennialism); worship style preferences (traditional vs. contemporary); counseling approaches (biblical or nouthetic counseling, integrationist counseling); creation views (young-earth, old-earth, theistic evolution); Christian liberty matters (diet, special days); church discipline practices (formal, informal, excommunication); parachurch organization roles; marriage role views (complementarian or egalitarian); non-essential doctrinal disagreements.
 """
 
 EVAL_SYSTEM_PROMPT = f"""You are an independent evaluator grading English theological Q&A answers.
+
 {DOCTRINE_TIER_DEFINITIONS}
 Task: Score four dimensions: Adherence, Kindness & Gentleness, Interfaith Sensitivity, Language Clarity (English).
 Warning: Relativism ("all religions equally true" / unjustified refusal to state core Christian claims) reduces Adherence.Core and Gospel_Boldness + Evangelism.

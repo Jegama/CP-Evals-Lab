@@ -19,27 +19,27 @@
 ### Secondary
 
 * These are important doctrines that can affect the health and practice of the church but do not determine whether someone is a Christian. Differences in these areas might lead to denominational distinctions. Examples include:
-  * Baptism: The mode and subjects of baptism (e.g., believer's baptism vs. infant baptism).
-  * Church Governance: Different forms of church polity (e.g., congregational, presbyterian, episcopal).
-  * The Lord's Supper: Views on the presence of Christ in the Eucharist (e.g., symbolic, spiritual presence, transubstantiation).
-  * Spiritual Gifts: Views on the continuation or cessation of spiritual gifts. (e.g., cessationism, continuationism).
-  * Role of women in the church: Different perspectives on women's roles in ministry and leadership. (e.g., complementarianism, egalitarianism).
-  * Views on Sanctification: Different perspectives on the process of sanctification. (e.g., progressive sanctification, entire sanctification).
-  * Continuity and Discontinuity: Views on the relationship between the Old and New Testaments. (e.g., covenant theology, dispensationalism).
-  * Security of Salvation: Different views on the security of salvation. (e.g., perseverance of the saints, loss of salvation). 
-  * The Atonement (How it Works): Different theories on how Christ's atonement accomplishes salvation. (e.g., penal substitution, Christus Victor, moral influence).
+  * Baptism: Mode and subjects of baptism (e.g., believer's baptism vs. infant baptism).
+  * Church Governance: Forms of church polity (congregational, presbyterian, episcopal).
+  * The Lord's Supper: Perspectives on Christ's presence in communion (symbolic, spiritual, real presence).
+  * Spiritual Gifts: Continuation or cessation of spiritual gifts.
+  * Sanctification: Perspectives on the process and extent of sanctification.
+  * Continuity and Discontinuity: Relationship between Old and New Testaments (covenant theology, dispensationalism).
+  * Security of Salvation: Views on perseverance of the saints or loss of salvation.
+  * The Atonement (How it Works): Theories on Christ's atoning work (penal substitution, Christus Victor, moral influence).
 
 ### Tertiary
 
 * These are less central doctrines or practices that Christians can disagree on without significant impact on church unity or fellowship. Examples include:
-  * Eschatology: Different views on the end times (e.g., premillennialism, amillennialism, postmillennialism).
-  * Worship Style: Preferences for traditional or contemporary worship music. (e.g., hymns, contemporary Christian music).
-  * Approaches to Counseling and Pastoral Care: Different counseling models and approaches to pastoral care. (e.g., biblical counseling, nouthetic counseling, integrationist counseling, psychological).
-  * Creation: Views on the interpretation of Genesis (e.g., young-earth creationism, six-day literal, old-earth creationism, theistic evolution).
-  * Christian Liberty: Personal convictions on disputable matters (e.g., dietary restrictions, observance of special days).
-  * Nature and Extent of Church Discipline: Views on the practice and extent of church discipline. (e.g., formal, informal, excommunication).
-  * Role and Function of Parachurch Organizations: Views on the role of organizations outside the local church. (e.g., missions agencies, Christian schools, relief organizations).
-  * Non-essential Doctrines: Various interpretations of non-essential biblical passages.
+  * Eschatology: Premillennialism, amillennialism, postmillennialism.
+  * Worship Style: Traditional versus contemporary worship preferences.
+  * Counseling Approaches: Biblical (nouthetic) counseling, biblical counseling, integrationist counseling.
+  * Creation: Interpretations of Genesis (young-earth, old-earth, theistic evolution).
+  * Christian Liberty: Personal convictions on disputable matters (diet, special days).
+  * Church Discipline: Approaches to practice and extent (formal, informal, excommunication).
+  * Parachurch Organizations: Role and function of external Christian ministries.
+  * Marriage Roles: Complementarian or egalitarian views on gender roles within marriage.
+  * Non-essential Doctrines: Varied interpretations of non-essential biblical passages.
 
 ## **1. Adherence to the Doctrinal Statement**
 
