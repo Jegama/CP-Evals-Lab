@@ -686,8 +686,8 @@ class EvaluationEngine:
             "openai": ParrotAIOpenAI,
             "together": ParrotAITogether,
             "hf": ParrotAIHF,
-            "gemini": ParrotAIGemini,
-            "grok": ParrotAIGrok,
+            "google": ParrotAIGemini,
+            "xai": ParrotAIGrok,
         }
 
         # Default models per provider
