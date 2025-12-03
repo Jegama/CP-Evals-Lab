@@ -23,7 +23,7 @@ Usage examples (Windows CMD):
       python cp_eval_llms.py --mode generate-ft_evals --provider together --gen-model meta-llama/Meta-Llama-3-8B-Instruct --answers-label llama8
 
   5) Generate answers using Gemini without system prompt:
-      python cp_eval_llms.py --mode generate-api_evals --provider gemini --gen-model gemini-2.5-flash --answers-label gemini-2.5-flash-vanilla
+      python cp_eval_llms.py --mode generate-api_evals --provider google --gen-model gemini-2.5-flash --answers-label gemini-2.5-flash-vanilla
 
   6) Generate answers using Grok without system prompt:
       python cp_eval_llms.py --mode generate-api_evals --provider grok --gen-model grok-3-mini --answers-label grok-3-mini-vanilla
@@ -43,28 +43,71 @@ import math
 import importlib
 from datetime import datetime as dt
 from pathlib import Path
-from typing import Dict, List, Tuple, Set, Optional
+from typing import Dict, List, Tuple, Set, Optional, Sequence
 from parrot_ai.llm_evaluation import (
     EvaluationEngine,
     load_qa_pairs,
     load_eval_questions,
 )
 
-BASE_CSV_ROWS = [
-    ("Adherence", None),
-    ("Kindness_and_Gentleness", None),
-    ("Interfaith_Sensitivity", "Respect_and_Handling_Objections"),
-    ("Interfaith_Sensitivity", "Objection_Acknowledgement"),
-    ("Interfaith_Sensitivity", "Evangelism"),
-    ("Interfaith_Sensitivity", "Gospel_Boldness"),
+CORE_SECTION_ORDER = [
+    "Adherence",
+    "Kindness_and_Gentleness",
+    "Interfaith_Sensitivity",
 ]
-ARABIC_EXTRA_ROWS = [
-    ("Arabic_Accuracy", "Grammar_and_Syntax"),
-    ("Arabic_Accuracy", "Theological_Nuance"),
-    ("Arabic_Accuracy", "Contextual_Clarity"),
-    ("Arabic_Accuracy", "Consistency_of_Terms"),
-    ("Arabic_Accuracy", "Arabic_Purity"),
+
+CORE_SECTION_SUBCRITERIA = {
+    "Adherence": [
+        "Core",
+        "Secondary",
+        "Tertiary_Handling",
+        "Biblical_Basis",
+        "Consistency",
+        "Overall",
+    ],
+    "Kindness_and_Gentleness": [
+        "Core_Clarity_with_Kindness",
+        "Pastoral_Sensitivity",
+        "Secondary_Fairness",
+        "Tertiary_Neutrality",
+        "Tone",
+        "Overall",
+    ],
+    "Interfaith_Sensitivity": [
+        "Respect_and_Handling_Objections",
+        "Objection_Acknowledgement",
+        "Evangelism",
+        "Gospel_Boldness",
+        "Overall",
+    ],
+}
+
+ARABIC_ACCURACY_SUBCRITERIA = [
+    "Grammar_and_Syntax",
+    "Theological_Nuance",
+    "Contextual_Clarity",
+    "Consistency_of_Terms",
+    "Arabic_Purity",
+    "Overall",
 ]
+
+META_ROWS = [
+    ("Meta", "System_Prompt_Label"),
+    ("Meta", "Judge_Model"),
+]
+
+
+def build_rows_order(include_arabic: bool) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for section in CORE_SECTION_ORDER:
+        for sub in CORE_SECTION_SUBCRITERIA[section]:
+            rows.append((section, sub))
+    if include_arabic:
+        for sub in ARABIC_ACCURACY_SUBCRITERIA:
+            rows.append(("Arabic_Accuracy", sub))
+    for section, sub in META_ROWS:
+        rows.append((section, sub))
+    return rows
 
 
 def sanitize_filename(name: str) -> str:
@@ -79,6 +122,7 @@ def generate_dataset(
     output_dataset: str,
     use_system_prompt: bool = False,
     limit: int = 100,
+    system_prompt_label: Optional[str] = None,
 ) -> str:
     # Load questions (limit=None means all if limit is 0)
     load_limit = None if limit == 0 else limit
@@ -140,6 +184,8 @@ def generate_dataset(
                 "timestamp": dt.now().isoformat(),
                 "use_system_prompt": use_system_prompt,
             }
+            if system_prompt_label:
+                obj["system_prompt_label"] = system_prompt_label
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
     return str(out_path)
 
@@ -171,20 +217,39 @@ def aggregate_scores(
 
 
 def ensure_csv_structure(
-    csv_path: Path, rows_order: list[tuple[str, Optional[str]]]
-) -> list[list[str]]:
-    if not csv_path.exists():
-        rows: list[list[str]] = []
-        for section, sub in rows_order:
-            rows.append([section, sub or "N/A"])  # no score columns yet
-        return rows
+    csv_path: Path, rows_order: Sequence[tuple[str, Optional[str]]]
+) -> tuple[list[list[str]], list[str]]:
+    header_models: list[str] = []
+    rows_by_key: Dict[tuple[str, str], list[str]] = {}
+    if csv_path.exists():
+        with csv_path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if header and len(header) > 2:
+                header_models = header[2:]
+            for r in reader:
+                if not r or len(r) < 2:
+                    continue
+                rows_by_key[(r[0], r[1])] = r
+
     rows: list[list[str]] = []
-    with csv_path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.reader(f)
-        next(reader, None)
-        for r in reader:
-            rows.append(r)
-    return rows
+    for section, sub in rows_order:
+        sub_label = sub or "N/A"
+        row = rows_by_key.pop((section, sub_label), None)
+        if row is None:
+            row = [section, sub_label] + ["" for _ in header_models]
+        elif len(row) < 2 + len(header_models):
+            row.extend([""] * (2 + len(header_models) - len(row)))
+        rows.append(row)
+
+    # Preserve any legacy rows that are not in the new ordering
+    for row in rows_by_key.values():
+        if len(row) < 2 + len(header_models):
+            row.extend([""] * (2 + len(header_models) - len(row)))
+        rows.append(row)
+
+    # New file case: header_models still empty -> rows only have first two columns
+    return rows, header_models
 
 
 def update_comparison_csv(
@@ -192,44 +257,45 @@ def update_comparison_csv(
     answers_label: str,
     aggregated: Dict[tuple, float],
     overwrite: bool,
-    rows_order: list[tuple[str, Optional[str]]],
+    rows_order: Sequence[tuple[str, Optional[str]]],
+    meta_values: Optional[Dict[tuple[str, str], str]] = None,
 ) -> None:
-    rows = ensure_csv_structure(csv_path, rows_order)
-    existing_header_models: list[str] = []
-    existing_header: list[str] = []
-    if csv_path.exists():
-        with csv_path.open("r", encoding="utf-8", newline="") as f:
-            reader = csv.reader(f)
-            header = next(reader, None)
-            if header:
-                existing_header = header
-                existing_header_models = header[2:]
+    rows, existing_header_models = ensure_csv_structure(csv_path, rows_order)
+    header_models = existing_header_models.copy()
     final_model_name = answers_label
-    if answers_label in existing_header_models and not overwrite:
+
+    if answers_label in header_models and not overwrite:
         suffix = 2
-        while f"{answers_label}_{suffix}" in existing_header_models:
+        while f"{answers_label}_{suffix}" in header_models:
             suffix += 1
         final_model_name = f"{answers_label}_{suffix}"
         print(
             f"[csv] Answers label exists; using '{final_model_name}' (use --overwrite to replace)."
         )
-    if existing_header_models and overwrite and answers_label in existing_header_models:
-        col_index = existing_header_models.index(answers_label) + 2
-        for row in rows:
-            criterion, subcrit = row[0], row[1]
-            key = (criterion, "Overall") if subcrit == "N/A" else (criterion, subcrit)
-            val = aggregated.get(key, "")
-            row[col_index] = "" if val == "" else str(val)
-        header = existing_header
+
+    overwrite_existing = overwrite and answers_label in header_models
+    if overwrite_existing:
+        col_index = header_models.index(answers_label) + 2
     else:
+        header_models.append(final_model_name)
+        target_width = 2 + len(header_models)
         for row in rows:
-            criterion, subcrit = row[0], row[1]
-            key = (criterion, "Overall") if subcrit == "N/A" else (criterion, subcrit)
-            val = aggregated.get(key, "")
-            row.append("" if val == "" else str(val))
-        header = ["Criterion", "Sub-criterion"] + existing_header_models
-        if not (overwrite and answers_label in existing_header_models):
-            header.append(final_model_name)
+            if len(row) < target_width:
+                row.extend([""] * (target_width - len(row)))
+        col_index = target_width - 1
+
+    meta_values = meta_values or {}
+    for row in rows:
+        criterion, subcrit = row[0], row[1]
+        key = (criterion, "Overall") if subcrit == "N/A" else (criterion, subcrit)
+        value = meta_values.get((criterion, subcrit))
+        if value is None:
+            value = aggregated.get(key, "")
+        if len(row) <= col_index:
+            row.extend([""] * (col_index + 1 - len(row)))
+        row[col_index] = "" if value == "" else str(value)
+
+    header = ["Criterion", "Sub-criterion"] + header_models
     with csv_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(header)
@@ -281,7 +347,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     )
     p.add_argument(
         "--provider",
-        choices=["openai", "together", "hf", "gemini", "grok"],
+        choices=["openai", "together", "hf", "google", "xai"],
         help="(generation modes only) API provider to use for generation (required for generate-* modes)",
     )
     p.add_argument(
@@ -301,6 +367,10 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         "--use-system-prompt",
         action="store_true",
         help="Use MAIN_SYSTEM_PROMPT from language prompts module for generation (mainly for API evals)",
+    )
+    p.add_argument(
+        "--system-prompt-label",
+        help="Optional label describing the system prompt or prompt version used for answer generation/evaluation",
     )
     p.add_argument(
         "--comparison-csv",
@@ -354,6 +424,26 @@ def infer_answers_label_from_dataset(path: Path) -> str | None:
     return None
 
 
+def infer_system_prompt_label_from_dataset(path: Path) -> str | None:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict):
+                    label = obj.get("system_prompt_label")
+                    if isinstance(label, str) and label:
+                        return label
+    except FileNotFoundError:
+        return None
+    return None
+
+
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
 
@@ -376,6 +466,7 @@ def main(argv: List[str]) -> int:
 
     # Determine answers label (may be overridden later if inferred from dataset)
     answers_label = args.answers_label
+    system_prompt_label = args.system_prompt_label
 
     # Comparison CSV path resolution
     if args.mode in ("dataset", "extended"):
@@ -438,6 +529,7 @@ def main(argv: List[str]) -> int:
                     str(output_dataset_path),
                     args.use_system_prompt,
                     limit=args.limit,
+                    system_prompt_label=args.system_prompt_label,
                 )
             )
             print(f"[generate] Dataset ready at {dataset_path}")
@@ -461,6 +553,12 @@ def main(argv: List[str]) -> int:
                 raise SystemExit(
                     "Provide --answers-label (could not infer from dataset)."
                 )
+
+    if not system_prompt_label and dataset_path.exists():
+        inferred_prompt = infer_system_prompt_label_from_dataset(dataset_path)
+        if inferred_prompt:
+            system_prompt_label = inferred_prompt
+            print(f"[infer] Using inferred system prompt label: {system_prompt_label}")
 
     if not answers_label:
         answers_label = "answers"
@@ -564,14 +662,22 @@ def main(argv: List[str]) -> int:
         print(f"  {k}: {aggregated[k]}")
 
     # Update comparison CSV
-    # Build rows order dynamically for this run (if file already exists we retain its structure via ensure_csv_structure)
-    rows_order = BASE_CSV_ROWS + (ARABIC_EXTRA_ROWS if include_arabic_accuracy else [])
+    # Build rows order dynamically for this run (legacy rows preserved via ensure_csv_structure)
+    rows_order = build_rows_order(include_arabic_accuracy)
+    csv_meta_values: Dict[tuple[str, str], str] = {
+        ("Meta", "Judge_Model"): args.judge_model,
+        ("Meta", "Gen_Model"): args.gen_model if generation_mode else "N/A",
+        ("Meta", "Provider"): args.provider if generation_mode else "N/A",
+    }
+    if system_prompt_label:
+        csv_meta_values[("Meta", "System_Prompt_Label")] = system_prompt_label
     update_comparison_csv(
         comparison_csv_path,
         answers_label,
         aggregated,
         overwrite=args.overwrite,
         rows_order=rows_order,
+        meta_values=csv_meta_values,
     )
 
     # Results JSONL placement (mode dependent)
@@ -600,6 +706,7 @@ def main(argv: List[str]) -> int:
         "gen_model": args.gen_model,
         "provider": args.provider if generation_mode else None,
         "use_system_prompt": args.use_system_prompt if generation_mode else None,
+        "system_prompt_label": system_prompt_label,
         "questions_file": questions_file,
         "language": args.language,
         "mode": args.mode,
