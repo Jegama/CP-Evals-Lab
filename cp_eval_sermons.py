@@ -153,9 +153,13 @@ def main(argv=None) -> int:
     engine = SermonEvaluationEngine(model=args.model)
     print(f"[init] Model={args.model} | Mode=audio | Runs={args.num_scoring_runs}")
 
-    # Step 1: Extract from audio
-    _, audio_file_obj = engine.upload_or_get_gemini_file(args.audio)
+    # Step 1: Extract from audio (also uploads and caches file internally)
     step1 = engine.extract_structure_from_audio(args.audio)
+    
+    # Get audio file object for Step 2 scoring (multi-run mode needs it)
+    _, audio_file_obj = engine.audio_manager.upload_or_get_gemini_file(
+        args.audio, engine.provider
+    )
 
     if step1.audio_duration:
         minutes = step1.audio_duration / 60.0
