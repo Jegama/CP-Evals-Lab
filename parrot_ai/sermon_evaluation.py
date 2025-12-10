@@ -92,20 +92,24 @@ class SermonEvaluationEngine:
         # 1. Try ffprobe first (most accurate for VBR/containers)
         try:
             import subprocess
+
             cmd = [
                 "ffprobe",
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                file_path
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                file_path,
             ]
             # Run with timeout to avoid hanging
             result = subprocess.run(
-                cmd, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE, 
-                text=True, 
-                timeout=5
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
             )
             if result.returncode == 0:
                 val = result.stdout.strip()
@@ -128,7 +132,7 @@ class SermonEvaluationEngine:
             audio = File(file_path)
             if audio is not None and audio.info:
                 return float(audio.info.length)
-            
+
             # Fallback: explicit detection by extension
             ext = Path(file_path).suffix.lower()
             if ext == ".mp3":
@@ -141,7 +145,7 @@ class SermonEvaluationEngine:
                 audio = FLAC(file_path)
             elif ext == ".ogg":
                 audio = OggVorbis(file_path)
-            
+
             if audio is not None and audio.info:
                 return float(audio.info.length)
 
@@ -744,15 +748,25 @@ class SermonEvaluationEngine:
             ]
         )
 
-        overall_base = self._avg(
-            [
-                textual_fidelity,
-                proposition_clarity,
-                application_effectiveness,
-                structure_cohesion,
-                illustrations,
-                introduction,
-            ]
+        # Weighted average per "Pillars First" scheme:
+        # Emphasizes textual fidelity, application, and structure (68%),
+        # with proposition (12%) and intro/illustrations (10% each) supporting.
+        # Weights align with Evaluation Pillars in the framework.
+        weights = {
+            "textual_fidelity": 0.24,
+            "application_effectiveness": 0.24,
+            "structure_cohesion": 0.20,
+            "proposition_clarity": 0.12,
+            "illustrations": 0.10,
+            "introduction": 0.10,
+        }
+        overall_base = (
+            textual_fidelity * weights["textual_fidelity"]
+            + application_effectiveness * weights["application_effectiveness"]
+            + structure_cohesion * weights["structure_cohesion"]
+            + proposition_clarity * weights["proposition_clarity"]
+            + illustrations * weights["illustrations"]
+            + introduction * weights["introduction"]
         )
         overall = self._clamp(overall_base)
 
@@ -810,13 +824,20 @@ class SermonEvaluationEngine:
         """Downshift inflated scores using evidence from Step 1.
 
         Heuristics (conservative, integer outputs 1–5):
-        - No explicit proposition -> Proposition sub-scores max 2; if any >2, set to 2.
+        - No explicit proposition -> Proposition sub-scores max 2 by default.
+          CONDITIONAL SOFTENING: If proposition missing BUT Step 1 shows strong evidence
+          (specific FCF, ≥3 body points OR ≥2 with subpoints, ≥2/3 points with concrete
+          applications, ≥2 hortatory points, cohesion indicators), cap is raised to 3
+          and placeholder bias is skipped for Proposition category.
         - No explicit conclusion -> Conclusion sub-scores max 2.
         - FCF missing/too vague -> Introduction.FCF_Introduced max 2.
+          Vagueness criteria: <20 chars OR <6 words OR unqualified generic singletons
+          OR vague phrases. Specificity signals (qualifiers, concrete needs) override.
         - Body points: if >50% lack Applications -> Main_Points.Application_Quality = min(curr, 2).
         - Body points: if >50% lack Illustrations -> Main_Points.Illustration_Quality = min(curr, 2) and Illustrations.* subs max 3.
         - If Body has <2 points -> Main_Points.Proportional_and_Coexistent max 2 and Structure cohesion later reflects via aggregates.
         - If any Step 1 field carries canonical placeholder, bias related category Overall down by 1 (min 1).
+          Exception: placeholder bias skipped for Proposition when conditional thresholds met.
         After changes, recompute each section's Overall as ceil(avg(subs)).
         """
         from math import ceil
@@ -827,17 +848,136 @@ class SermonEvaluationEngine:
         # Convenience references
         prop_text = (extraction.Proposition or "").strip().lower()
         concl_text = (extraction.Conclusion or "").strip().lower()
-        fcf_text = (extraction.Fallen_Condition_Focus.FCF or "").strip().lower()
+        fcf_original = (extraction.Fallen_Condition_Focus.FCF or "").strip().lower()
         body = extraction.Body or []
 
-        # 1) Proposition present?
-        if "no explicit proposition" in prop_text or not prop_text:
+        # Helper: check if FCF is specific (not vague)
+        def is_fcf_specific(fcf_str: str) -> bool:
+            """Layered FCF specificity check.
+            
+            Returns False if:
+            - Length < 20 chars OR < 6 words
+            - Contains unqualified generic singletons (exact match as standalone word)
+            - Contains vague phrases
+            Returns True if:
+            - Contains specificity signals (qualifiers, concrete needs)
+            """
+            if not fcf_str or len(fcf_str) < 20:
+                return False
+            word_count = len(fcf_str.split())
+            if word_count < 6:
+                return False
+                        
+            # Generic singletons (exact word match)
+            generic_singletons = [
+                "sin", "sinfulness", "brokenness", "struggle", "temptation",
+                "fear", "doubt", "pride", "guilt", "shame", "idolatry",
+                "loneliness", "suffering", "pain"
+            ]
+            words = fcf_str.split()
+            # Check if FCF is ONLY a singleton (unqualified)
+            if word_count <= 2 and any(w in generic_singletons for w in words):
+                return False
+            
+            # Vague phrases
+            vague_phrases = [
+                "we all struggle", "people struggle", "general", "human condition",
+                "broken world", "sin nature", "common issue", "life is hard",
+                "try harder"
+            ]
+            if any(vp in fcf_str for vp in vague_phrases):
+                return False
+            
+            # Specificity signals (qualifiers and concrete needs)
+            qualifiers = ["of ", "for ", "in ", "under ", "against ", "before ", "toward ", "from "]
+            concrete_needs = [
+                "fear of man", "works-righteousness", "self-reliant", "self reliant",
+                "partiality", "bitterness", "envy", "sexual immorality", "resentment",
+                "control", "anxiety", "legalism", "unbelief", "despair", "self-righteousness",
+                "self righteousness", "performance", "approval", "abandonment"
+            ]
+            has_qualifier = any(q in fcf_str for q in qualifiers)
+            has_concrete = any(cn in fcf_str for cn in concrete_needs)
+            
+            return has_qualifier or has_concrete
+        
+        # Helper: check if point text has hortatory cues
+        def has_hortatory_cues(point_text: str, summary_text: str) -> bool:
+            """Check for hortatory language (imperative/exhortation) vs mere recap."""
+            combined = (point_text + " " + summary_text).lower()
+            # Hortatory signals
+            hortatory = [
+                "should", "must", "ought", "need to", "called to", "repent", "obey",
+                "trust", "believe", "follow", "pursue", "reject", "embrace",
+                "because", "therefore", "so that", "thus", "hence"
+            ]
+            # Recap signals (negative)
+            recap = ["verses", "talks about", "is about", "discusses", "mentions", "says that"]
+            
+            has_hort = any(h in combined for h in hortatory)
+            has_recap = any(r in combined for r in recap)
+            
+            return has_hort and not has_recap
+        
+        # Helper: check if applications are concrete
+        def has_concrete_application(app_list: list) -> bool:
+            """Check if application list contains concrete action verbs/nouns."""
+            if not app_list:
+                return False
+            app_text = " ".join(app_list).lower()
+            concrete_verbs = [
+                "repent", "confess", "trust", "believe", "pray", "reconcile",
+                "forgive", "serve", "love", "honor", "submit", "obey", "seek",
+                "rest", "rejoice", "give", "share", "pursue", "reject", "turn"
+            ]
+            return any(cv in app_text for cv in concrete_verbs)
+        
+        # 1) Proposition present? Check conditional thresholds for softening
+        proposition_missing = "no explicit proposition" in prop_text or not prop_text
+        conditional_softening_applies = False
+        fcf_specific = is_fcf_specific(fcf_original)
+        
+        if proposition_missing:
+            # Check evidence thresholds
+            
+            body_count_ok = len(body) >= 3 or (
+                len(body) >= 2 and any(p.Subpoints for p in body)
+            )
+            
+            points_with_concrete_apps = sum(
+                1 for p in body if has_concrete_application(p.Application or [])
+            )
+            apps_present = len(body) > 0 and (points_with_concrete_apps / len(body)) >= 0.67
+            
+            hortatory_count = sum(
+                1 for p in body
+                if has_hortatory_cues(p.Point or "", p.Summary or "")
+            )
+            hortatory_ok = hortatory_count >= 2
+            
+            # Cohesion: check for lexical overlap and conclusion presence
+            conclusion_present = "no explicit conclusion" not in concl_text and concl_text
+            # Simple lexical overlap: at least 2 meaningful words (>3 chars) shared between FCF and points
+            fcf_words = set(w for w in fcf_original.lower().split() if len(w) > 3)
+            point_words = set(
+                w for p in body for w in (p.Point or "").lower().split() if len(w) > 3
+            )
+            overlap_ok = len(fcf_words & point_words) >= 2
+            cohesion_ok = conclusion_present and overlap_ok
+            
+            # Apply conditional softening if all thresholds met
+            conditional_softening_applies = (
+                fcf_specific and body_count_ok and apps_present and hortatory_ok and cohesion_ok
+            )
+            
+            # Cap Proposition scores: ≤3 if conditional, ≤2 if strict
+            cap = 3 if conditional_softening_applies else 2
             s = scoring.Proposition
             s.Principle_and_Application_Wed = clamp_int(
-                min(s.Principle_and_Application_Wed, 2)
+                min(s.Principle_and_Application_Wed, cap)
             )
-            s.Establishes_Main_Theme = clamp_int(min(s.Establishes_Main_Theme, 2))
-            s.Summarizes_Introduction = clamp_int(min(s.Summarizes_Introduction, 2))
+            s.Establishes_Main_Theme = clamp_int(min(s.Establishes_Main_Theme, cap))
+            s.Summarizes_Introduction = clamp_int(min(s.Summarizes_Introduction, cap))
 
         # 2) Conclusion present?
         if "no explicit conclusion" in concl_text or not concl_text:
@@ -847,21 +987,8 @@ class SermonEvaluationEngine:
             s.Climax = clamp_int(min(s.Climax, 2))
             s.Pointed_End = clamp_int(min(s.Pointed_End, 2))
 
-        # 3) FCF specificity
-        vague_terms = [
-            "we all struggle",
-            "general",
-            "people struggle",
-            "sin",
-            "broken",
-            "brokenness",
-        ]
-        fcf_vague = (
-            (not fcf_text)
-            or (len(fcf_text) < 12)
-            or any(t in fcf_text for t in vague_terms)
-        )
-        if fcf_vague:
+        # 3) FCF specificity (use improved layered check)
+        if not fcf_specific:
             scoring.Introduction.FCF_Introduced = clamp_int(
                 min(scoring.Introduction.FCF_Introduced, 2)
             )
@@ -897,10 +1024,13 @@ class SermonEvaluationEngine:
             )
 
         # 6) If placeholders present, downshift related Overall by 1 later
+        #    Exception: skip Proposition bias when conditional softening applies
         placeholder_bias = 0
-        placeholder_bias += (
-            1 if ("no explicit proposition" in prop_text or not prop_text) else 0
+        proposition_bias_applies = (
+            ("no explicit proposition" in prop_text or not prop_text)
+            and not conditional_softening_applies
         )
+        placeholder_bias += 1 if proposition_bias_applies else 0
         placeholder_bias += (
             1 if ("no explicit conclusion" in concl_text or not concl_text) else 0
         )

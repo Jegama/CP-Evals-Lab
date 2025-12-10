@@ -323,4 +323,13 @@ Metric derivations reminder:
 * Application_Effectiveness ≈ avg(Application.Clear_and_Practical, Application.Redemptive_Focus, Application.Mandate_vs_Idea_Distinction, Application.Passage_Supported, Main_Points.Application_Quality)
 * Structure_Cohesion ≈ avg(Main_Points.Proportional_and_Coexistent, Conclusion.Summary, Conclusion.Compelling_Exhortation, Conclusion.Climax, Conclusion.Pointed_End)
 * Illustrations ≈ avg(Main_Points.Illustration_Quality, Illustrations.Lived_Body_Detail, Illustrations.Strengthens_Points, Illustrations.Proportion)
-* Overall_Impact ≈ avg(Textual_Fidelity, Proposition_Clarity, Application_Effectiveness, Structure_Cohesion, Illustrations, Introduction)"""
+* Overall_Impact = **weighted average** using "Pillars First" weights:
+  - Textual_Fidelity × 0.24
+  - Application_Effectiveness × 0.24
+  - Structure_Cohesion × 0.20
+  - Proposition_Clarity × 0.12
+  - Illustrations × 0.10
+  - Introduction × 0.10
+  Then subtract any Duration_Penalty (if sermon is < 35 or > 50 minutes).
+
+Important: When explaining Overall_Impact, account for the differential weighting. For example, a 0.5-point deficit in Textual_Fidelity (24% weight) has 2.4× the impact of a 0.5-point deficit in Introduction (10% weight). Prioritize coaching on the highest-weighted deficits."""
