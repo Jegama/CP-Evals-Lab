@@ -59,7 +59,8 @@ class AudioFileManager:
                 val = result.stdout.strip()
                 if val:
                     return float(val)
-        except Exception:
+        except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, OSError):
+            # ffprobe not installed, timed out, invalid output, or file access error
             pass
 
         # 2. Fallback to mutagen
@@ -90,7 +91,8 @@ class AudioFileManager:
             if audio is not None and audio.info:
                 return float(audio.info.length)
 
-        except Exception as e:
+        except (ImportError, OSError, AttributeError, ValueError) as e:
+            # mutagen not installed, file access error, missing attributes, or invalid data
             print(
                 f"[sermons] Warning: could not extract audio duration from {file_path}: {e}"
             )
@@ -105,7 +107,8 @@ class AudioFileManager:
                 gb = mb / 1024
                 return f"{gb:.2f} GB"
             return f"{mb:.2f} MB"
-        except Exception:
+        except (TypeError, ZeroDivisionError):
+            # Invalid input type or division error
             return f"{bytes_count} B"
 
     @staticmethod
@@ -128,14 +131,19 @@ class AudioFileManager:
             yield
         finally:
             stop.set()
-            t.join(timeout=0.2)
-            print(f"{message} done.")
+            # Increased timeout and added cleanup check
+            if not t.join(timeout=1.0):
+                # Thread didn't terminate cleanly, but it's a daemon so it will be killed
+                print(f"\r{message} done (cleanup delayed).")
+            else:
+                print(f"{message} done.")
 
     def load_cache(self) -> Dict[str, Any]:
         """Load audio file upload cache."""
         try:
             return json.loads(self.audio_cache_path.read_text(encoding="utf-8"))
-        except Exception:
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            # Cache file missing, corrupted, or unreadable
             return {}
 
     def save_cache(self, cache: Dict[str, Any]) -> None:
@@ -190,7 +198,8 @@ class AudioFileManager:
         # Upload new file
         try:
             size_bytes = os.path.getsize(abs_path)
-        except Exception:
+        except (FileNotFoundError, OSError):
+            # File missing or inaccessible
             size_bytes = -1
         size_str = (
             self.format_file_size(size_bytes) if size_bytes >= 0 else "unknown size"

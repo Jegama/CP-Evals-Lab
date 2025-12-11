@@ -24,9 +24,16 @@ class SermonAggregator:
 
     @staticmethod
     def avg(vals):
-        """Calculate average of non-None values."""
+        """Calculate average of non-None values.
+        
+        Returns 1.0 as fallback if all values are None (minimum score on 1-5 scale).
+        Logs warning when fallback is used to help identify missing data issues.
+        """
         lst = [v for v in vals if v is not None]
-        return sum(lst) / len(lst) if lst else 1.0
+        if not lst:
+            print("[sermons] Warning: avg() called with all None values, returning 1.0 as fallback")
+            return 1.0
+        return sum(lst) / len(lst)
 
     def compute_aggregates(
         self, scoring: SermonScoringStep2, extraction: SermonExtractionStep1

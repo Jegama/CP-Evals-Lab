@@ -22,7 +22,6 @@ from .evaluation_schemas import (
     SermonExtractionStep1,
     SermonScoringStep2,
     SermonScoringStep2Raw,
-    AggregatedSummaryFeedback,
 )
 from .core import ParrotAIGemini
 from .sermon_audio_utils import AudioFileManager
@@ -198,50 +197,11 @@ class SermonEvaluationEngine:
         extraction: SermonExtractionStep1,
         num_runs: int,
     ) -> None:
-        """Generate and attach aggregate feedback to scoring."""
-        step2_dump = scoring.model_dump(exclude={"Aggregated_Summary_Feedback"})
-        extraction_json = json.dumps(extraction.model_dump(), ensure_ascii=False)
-
-        duration_info = ""
-        if extraction.audio_duration is not None:
-            duration_minutes = extraction.audio_duration / 60.0
-            duration_info = f"\\n\\nSermon Duration: {duration_minutes:.1f} minutes"
-            if (
-                scoring.Aggregated_Summary
-                and scoring.Aggregated_Summary.duration_penalty
-            ):
-                duration_info += f" (penalty applied: {scoring.Aggregated_Summary.duration_penalty:.2f} points)"
-
-        multi_run_note = (
-            f"\\n\\nMulti-run note: This evaluation averaged {num_runs} independent scoring runs with confidence-weighted harmonization."
-            if num_runs > 1
-            else ""
-        )
-
-        agg_prompt = (
-            f"{self.prompts.AGG_SUMMARY_INSTRUCTIONS}{multi_run_note}\\n\\n"
-            f"Step 1 JSON:\\n{extraction_json}\\n\\n"
-            f"Step 2 JSON:\\n{json.dumps(step2_dump, ensure_ascii=False)}\\n\\n"
-            f"Aggregated Summary JSON:\\n"
-            f"{json.dumps(scoring.Aggregated_Summary.model_dump() if scoring.Aggregated_Summary else {}, ensure_ascii=False)}"
-            f"{duration_info}"
-        )
-
-        try:
-            with self.audio_manager.upload_indicator(
-                message="Summarizing aggregate insights"
-            ):
-                agg_feedback_data = self.provider.generate_structured(
-                    prompt=agg_prompt,
-                    response_schema=AggregatedSummaryFeedback,
-                    system=self.prompts.AGG_SUMMARY_SYSTEM_PROMPT,
-                    model=self.model,
-                )
-            scoring.Aggregated_Summary_Feedback = AggregatedSummaryFeedback(
-                **agg_feedback_data
-            )
-        except Exception as exc:
-            print(f"[sermons] Warning: could not generate aggregate feedback: {exc}")
+        """Generate and attach aggregate feedback to scoring.
+        
+        Delegates to harmonizer's implementation to avoid code duplication.
+        """
+        self.harmonizer._generate_aggregate_feedback(scoring, extraction, num_runs)
 
     # ----------- Legacy helpers (preserved for compatibility) -----------
     @staticmethod

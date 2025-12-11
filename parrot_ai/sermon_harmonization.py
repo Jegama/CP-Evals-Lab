@@ -2,12 +2,17 @@
 
 Implements self-consistency with confidence-weighted averaging and LLM-based
 feedback synthesis.
+
+Configuration constants:
+- SCORING_SEEDS: Fixed seeds for reproducible multi-run scoring
+- MAX_RETRY_BATCHES: Maximum number of retry attempts for failed runs
+- MAX_PARALLEL_WORKERS: Limit on concurrent API calls
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Protocol
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .evaluation_schemas import (
@@ -20,11 +25,70 @@ from .sermon_aggregation import SermonAggregator
 from .sermon_calibration import SermonScoreCalibrator
 from .sermon_audio_utils import AudioFileManager
 
+# Configuration constants for multi-run evaluation
+SCORING_SEEDS = [
+    1689,  # Historic year (Second London Baptist Confession of Faith)
+    2025,  # Current year baseline
+    3141,  # Pi-inspired for mathematical reproducibility
+    4567,  # Sequential pattern
+    5000,  # Round number
+    6789,  # Sequential pattern
+    7890,  # Sequential pattern
+    8888,  # Repeating pattern
+    9999,  # Maximum 4-digit pattern
+]
+MAX_RETRY_BATCHES = 2  # Allow up to 2 retry attempts for failed scoring runs
+MAX_PARALLEL_WORKERS = 5  # Limit concurrent API calls to avoid rate limits
+
+
+class ProviderProtocol(Protocol):
+    """Protocol for AI provider with structured generation capabilities."""
+
+    def generate_structured(
+        self,
+        prompt: str,
+        response_schema: type,
+        system: Optional[str],
+        model: str,
+        seed: Optional[int] = None,
+    ) -> dict: ...
+
+    def generate_structured_with_contents(
+        self,
+        contents: list,
+        response_schema: type,
+        system: Optional[str],
+        model: str,
+        seed: Optional[int] = None,
+    ) -> dict: ...
+
+
+class PromptsProtocol(Protocol):
+    """Protocol for prompts module with sermon evaluation prompts."""
+
+    @property
+    def SCORING_INSTRUCTIONS(self) -> str: ...
+    
+    @property
+    def SCORING_SYSTEM_PROMPT(self) -> str: ...
+    
+    @property
+    def HARMONIZE_INSTRUCTIONS(self) -> str: ...
+    
+    @property
+    def HARMONIZE_SYSTEM_PROMPT(self) -> str: ...
+    
+    @property
+    def AGG_SUMMARY_INSTRUCTIONS(self) -> str: ...
+    
+    @property
+    def AGG_SUMMARY_SYSTEM_PROMPT(self) -> str: ...
+
 
 class SermonHarmonizer:
     """Handles multi-run scoring and harmonization."""
 
-    def __init__(self, provider: Any, model: str, prompts: Any):
+    def __init__(self, provider: ProviderProtocol, model: str, prompts: PromptsProtocol):
         self.provider = provider
         self.model = model
         self.prompts = prompts
@@ -82,20 +146,34 @@ class SermonHarmonizer:
         Uses ThreadPoolExecutor for parallel API calls. Retries failed runs up to 2 batches
         until num_runs successful results are obtained. Returns harmonized scoring with
         averaged integers and synthesized feedback.
+        
+        Args:
+            extraction: Step 1 extraction results
+            audio_file_obj: Optional audio file object for Gemini API
+            num_runs: Number of parallel scoring runs (must be 1-9)
+            
+        Raises:
+            ValueError: If num_runs is invalid
         """
+        if not isinstance(num_runs, int) or num_runs < 1:
+            raise ValueError(f"num_runs must be a positive integer, got {num_runs}")
+        if num_runs > len(SCORING_SEEDS):
+            raise ValueError(
+                f"num_runs ({num_runs}) exceeds available seeds ({len(SCORING_SEEDS)}). "
+                f"Maximum supported is {len(SCORING_SEEDS)}"
+            )
+        
         print(
             f"[sermons] Running {num_runs} parallel scoring runs for self-consistency..."
         )
 
-        seeds = [1689, 2024, 3141, 4567, 5000, 6789, 7890, 8888, 9999]
         runs: List[SermonScoringStep2Raw] = []
         seed_idx = 0
-        max_retry_batches = 2
         retry_batch = 0
 
-        while len(runs) < num_runs and retry_batch <= max_retry_batches:
+        while len(runs) < num_runs and retry_batch <= MAX_RETRY_BATCHES:
             needed = num_runs - len(runs)
-            batch_seeds = seeds[seed_idx : seed_idx + needed]
+            batch_seeds = SCORING_SEEDS[seed_idx : seed_idx + needed]
             seed_idx += needed
 
             if retry_batch > 0:
@@ -103,7 +181,7 @@ class SermonHarmonizer:
                     f"[sermons] Retry batch {retry_batch}: running {needed} more attempts..."
                 )
 
-            with ThreadPoolExecutor(max_workers=min(needed, 5)) as executor:
+            with ThreadPoolExecutor(max_workers=min(needed, MAX_PARALLEL_WORKERS)) as executor:
                 futures = {
                     executor.submit(
                         self.score_single_run, extraction, audio_file_obj, s
