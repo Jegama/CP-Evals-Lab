@@ -23,7 +23,7 @@ Usage examples (Windows CMD):
       python cp_eval_llms.py --mode generate-ft_evals --provider together --gen-model meta-llama/Meta-Llama-3-8B-Instruct --answers-label llama8
 
   5) Generate answers using Gemini without system prompt:
-      python cp_eval_llms.py --mode generate-api_evals --provider gemini --gen-model gemini-2.5-flash --answers-label gemini-2.5-flash-vanilla
+      python cp_eval_llms.py --mode generate-api_evals --provider google --gen-model gemini-2.5-flash --answers-label gemini-2.5-flash-vanilla
 
   6) Generate answers using Grok without system prompt:
       python cp_eval_llms.py --mode generate-api_evals --provider grok --gen-model grok-3-mini --answers-label grok-3-mini-vanilla
@@ -31,36 +31,88 @@ Usage examples (Windows CMD):
 If the comparison CSV exists, a new model column is appended. If the model name already exists,
 either pass --overwrite to replace it, or a numeric suffix will be added automatically.
 """
+
 from __future__ import annotations
-import argparse, csv, json, re, sys, random, math, importlib
+import argparse
+import csv
+import json
+import re
+import sys
+import random
+import math
+import importlib
 from datetime import datetime as dt
 from pathlib import Path
-from typing import Dict, List, Tuple, Set, Optional
+from typing import Dict, List, Tuple, Set, Optional, Sequence
 from parrot_ai.llm_evaluation import (
     EvaluationEngine,
     load_qa_pairs,
     load_eval_questions,
 )
-BASE_CSV_ROWS = [
-    ("Adherence", None),
-    ("Kindness_and_Gentleness", None),
-    ("Interfaith_Sensitivity", "Respect_and_Handling_Objections"),
-    ("Interfaith_Sensitivity", "Objection_Acknowledgement"),
-    ("Interfaith_Sensitivity", "Evangelism"),
-    ("Interfaith_Sensitivity", "Gospel_Boldness"),
-]
-ARABIC_EXTRA_ROWS = [
-    ("Arabic_Accuracy", "Grammar_and_Syntax"),
-    ("Arabic_Accuracy", "Theological_Nuance"),
-    ("Arabic_Accuracy", "Contextual_Clarity"),
-    ("Arabic_Accuracy", "Consistency_of_Terms"),
-    ("Arabic_Accuracy", "Arabic_Purity"),
+
+CORE_SECTION_ORDER = [
+    "Adherence",
+    "Kindness_and_Gentleness",
+    "Interfaith_Sensitivity",
 ]
 
-def sanitize_filename(
-    name: str
-) -> str:
+CORE_SECTION_SUBCRITERIA = {
+    "Adherence": [
+        "Core",
+        "Secondary",
+        "Tertiary_Handling",
+        "Biblical_Basis",
+        "Consistency",
+        "Overall",
+    ],
+    "Kindness_and_Gentleness": [
+        "Core_Clarity_with_Kindness",
+        "Pastoral_Sensitivity",
+        "Secondary_Fairness",
+        "Tertiary_Neutrality",
+        "Tone",
+        "Overall",
+    ],
+    "Interfaith_Sensitivity": [
+        "Respect_and_Handling_Objections",
+        "Objection_Acknowledgement",
+        "Evangelism",
+        "Gospel_Boldness",
+        "Overall",
+    ],
+}
+
+ARABIC_ACCURACY_SUBCRITERIA = [
+    "Grammar_and_Syntax",
+    "Theological_Nuance",
+    "Contextual_Clarity",
+    "Consistency_of_Terms",
+    "Arabic_Purity",
+    "Overall",
+]
+
+META_ROWS = [
+    ("Meta", "System_Prompt_Label"),
+    ("Meta", "Judge_Model"),
+]
+
+
+def build_rows_order(include_arabic: bool) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for section in CORE_SECTION_ORDER:
+        for sub in CORE_SECTION_SUBCRITERIA[section]:
+            rows.append((section, sub))
+    if include_arabic:
+        for sub in ARABIC_ACCURACY_SUBCRITERIA:
+            rows.append(("Arabic_Accuracy", sub))
+    for section, sub in META_ROWS:
+        rows.append((section, sub))
+    return rows
+
+
+def sanitize_filename(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", name)
+
 
 def generate_dataset(
     provider: str,
@@ -68,22 +120,29 @@ def generate_dataset(
     gen_model: str,
     engine: EvaluationEngine,
     output_dataset: str,
-    use_system_prompt: bool = False
+    use_system_prompt: bool = False,
+    limit: int = 100,
+    system_prompt_label: Optional[str] = None,
 ) -> str:
-    # Always use full questions file
-    questions = load_eval_questions(questions_file)
+    # Load questions (limit=None means all if limit is 0)
+    load_limit = None if limit == 0 else limit
+    questions = load_eval_questions(questions_file, limit=load_limit)
     if not questions:
         raise SystemExit("No questions loaded for generation.")
-    
+
     # Get system prompt if requested
     system_prompt = None
     if use_system_prompt:
         try:
-            prompt_module = importlib.import_module(f"parrot_ai.prompts.{engine.language}")
+            prompt_module = importlib.import_module(
+                f"parrot_ai.prompts.{engine.language}"
+            )
             system_prompt = getattr(prompt_module, "MAIN_SYSTEM_PROMPT", None)
         except (ImportError, AttributeError):
-            print(f"[warning] Could not load system prompt for language '{engine.language}', proceeding without system prompt")
-    
+            print(
+                f"[warning] Could not load system prompt for language '{engine.language}', proceeding without system prompt"
+            )
+
     # Generate responses using the unified method
     responses = engine.generate_responses(
         questions,
@@ -91,24 +150,33 @@ def generate_dataset(
         model=gen_model,
         system=system_prompt if use_system_prompt else None,
     )
-    
+
     out_path = Path(output_dataset)
     mode_flag = "a" if out_path.exists() else "w"
-    print(f"[generate] {'Appending to' if mode_flag=='a' else 'Creating'} dataset: {out_path}")
+    print(
+        f"[generate] {'Appending to' if mode_flag == 'a' else 'Creating'} dataset: {out_path}"
+    )
     with out_path.open(mode_flag, encoding="utf-8") as f:
         if use_system_prompt and system_prompt:
-            f.write(json.dumps({"role": "system", "content": system_prompt}, ensure_ascii=False) + "\n")
+            f.write(
+                json.dumps(
+                    {"role": "system", "content": system_prompt}, ensure_ascii=False
+                )
+                + "\n"
+            )
 
         for r in responses:
             if "error" in r:
-                print(f"[warning] Error generating response for question {r['index']}: {r['error']}")
+                print(
+                    f"[warning] Error generating response for question {r['index']}: {r['error']}"
+                )
                 continue
-            
+
             msgs = [
                 {"role": "user", "content": r["question"]},
                 {"role": "assistant", "content": r["answer"]},
             ]
-            
+
             obj = {
                 "messages": msgs,
                 "gen_model": gen_model,
@@ -116,12 +184,14 @@ def generate_dataset(
                 "timestamp": dt.now().isoformat(),
                 "use_system_prompt": use_system_prompt,
             }
+            if system_prompt_label:
+                obj["system_prompt_label"] = system_prompt_label
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
     return str(out_path)
 
+
 def aggregate_scores(
-    results: List[dict],
-    include_arabic_accuracy: bool
+    results: List[dict], include_arabic_accuracy: bool
 ) -> Dict[tuple, float]:
     agg: Dict[tuple, float] = {}
     counts: Dict[tuple, int] = {}
@@ -145,76 +215,102 @@ def aggregate_scores(
                 counts[(section, key)] = counts.get((section, key), 0) + 1
     return {k: round(agg[k] / counts[k], 2) for k in agg if counts.get(k)}
 
+
 def ensure_csv_structure(
-    csv_path: Path,
-    rows_order: list[tuple[str, Optional[str]]]
-) -> list[list[str]]:
-    if not csv_path.exists():
-        rows: list[list[str]] = []
-        for section, sub in rows_order:
-            rows.append([section, sub or "N/A"])  # no score columns yet
-        return rows
+    csv_path: Path, rows_order: Sequence[tuple[str, Optional[str]]]
+) -> tuple[list[list[str]], list[str]]:
+    header_models: list[str] = []
+    rows_by_key: Dict[tuple[str, str], list[str]] = {}
+    if csv_path.exists():
+        with csv_path.open("r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if header and len(header) > 2:
+                header_models = header[2:]
+            for r in reader:
+                if not r or len(r) < 2:
+                    continue
+                rows_by_key[(r[0], r[1])] = r
+
     rows: list[list[str]] = []
-    with csv_path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        for r in reader: rows.append(r)
-    return rows
+    for section, sub in rows_order:
+        sub_label = sub or "N/A"
+        row = rows_by_key.pop((section, sub_label), None)
+        if row is None:
+            row = [section, sub_label] + ["" for _ in header_models]
+        elif len(row) < 2 + len(header_models):
+            row.extend([""] * (2 + len(header_models) - len(row)))
+        rows.append(row)
+
+    # Preserve any legacy rows that are not in the new ordering
+    for row in rows_by_key.values():
+        if len(row) < 2 + len(header_models):
+            row.extend([""] * (2 + len(header_models) - len(row)))
+        rows.append(row)
+
+    # New file case: header_models still empty -> rows only have first two columns
+    return rows, header_models
+
 
 def update_comparison_csv(
     csv_path: Path,
     answers_label: str,
     aggregated: Dict[tuple, float],
     overwrite: bool,
-    rows_order: list[tuple[str, Optional[str]]]
+    rows_order: Sequence[tuple[str, Optional[str]]],
+    meta_values: Optional[Dict[tuple[str, str], str]] = None,
 ) -> None:
-    rows = ensure_csv_structure(csv_path, rows_order)
-    existing_header_models: list[str] = []
-    existing_header: list[str] = []
-    if csv_path.exists():
-        with csv_path.open("r", encoding="utf-8", newline="") as f:
-            reader = csv.reader(f)
-            header = next(reader, None)
-            if header:
-                existing_header = header
-                existing_header_models = header[2:]
+    rows, existing_header_models = ensure_csv_structure(csv_path, rows_order)
+    header_models = existing_header_models.copy()
     final_model_name = answers_label
-    if answers_label in existing_header_models and not overwrite:
+
+    if answers_label in header_models and not overwrite:
         suffix = 2
-        while f"{answers_label}_{suffix}" in existing_header_models: suffix += 1
+        while f"{answers_label}_{suffix}" in header_models:
+            suffix += 1
         final_model_name = f"{answers_label}_{suffix}"
-        print(f"[csv] Answers label exists; using '{final_model_name}' (use --overwrite to replace).")
-    if existing_header_models and overwrite and answers_label in existing_header_models:
-        col_index = existing_header_models.index(answers_label) + 2
-        for row in rows:
-            criterion, subcrit = row[0], row[1]
-            key = (criterion, "Overall") if subcrit == "N/A" else (criterion, subcrit)
-            val = aggregated.get(key, "")
-            row[col_index] = "" if val == "" else str(val)
-        header = existing_header
+        print(
+            f"[csv] Answers label exists; using '{final_model_name}' (use --overwrite to replace)."
+        )
+
+    overwrite_existing = overwrite and answers_label in header_models
+    if overwrite_existing:
+        col_index = header_models.index(answers_label) + 2
     else:
+        header_models.append(final_model_name)
+        target_width = 2 + len(header_models)
         for row in rows:
-            criterion, subcrit = row[0], row[1]
-            key = (criterion, "Overall") if subcrit == "N/A" else (criterion, subcrit)
-            val = aggregated.get(key, "")
-            row.append("" if val == "" else str(val))
-        header = ["Criterion", "Sub-criterion"] + existing_header_models
-        if not (overwrite and answers_label in existing_header_models): header.append(final_model_name)
+            if len(row) < target_width:
+                row.extend([""] * (target_width - len(row)))
+        col_index = target_width - 1
+
+    meta_values = meta_values or {}
+    for row in rows:
+        criterion, subcrit = row[0], row[1]
+        key = (criterion, "Overall") if subcrit == "N/A" else (criterion, subcrit)
+        value = meta_values.get((criterion, subcrit))
+        if value is None:
+            value = aggregated.get(key, "")
+        if len(row) <= col_index:
+            row.extend([""] * (col_index + 1 - len(row)))
+        row[col_index] = "" if value == "" else str(value)
+
+    header = ["Criterion", "Sub-criterion"] + header_models
     with csv_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f); writer.writerow(header); writer.writerows(rows)
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(rows)
     print(f"[csv] Updated -> {csv_path}")
 
-def append_results_jsonl(
-    path: Path,
-    results: List[dict],
-    meta: dict
-) -> None:
+
+def append_results_jsonl(path: Path, results: List[dict], meta: dict) -> None:
     mode = "a" if path.exists() else "w"
     with path.open(mode, encoding="utf-8") as f:
         for r in results:
             r_out = {**r, **meta}
             f.write(json.dumps(r_out, ensure_ascii=False) + "\n")
     print(f"[results] Appended {len(results)} -> {path}")
+
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
     """Parse CLI arguments.
@@ -227,29 +323,89 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
             └─ api_evals/ (generate-api_evals mode: generated datasets, comparison + results JSONL)
     """
     p = argparse.ArgumentParser(description="Generate and/or evaluate QA datasets.")
-    p.add_argument("--language", choices=["arabic", "english"], default="arabic",
-                   help="Language namespace: chooses data/<language>/ tree (default: arabic)")
-    p.add_argument("--mode", choices=["dataset", "extended", "generate-ft_evals", "generate-api_evals"], default="dataset",
-                   help="dataset: evaluate existing training dataset using fixed 100-question file; extended: random sample of max(500,10%%) questions from dataset; generate-ft_evals: generate answers for fine-tuned models; generate-api_evals: generate answers for API models")
+    p.add_argument(
+        "--language",
+        choices=["arabic", "english"],
+        default="arabic",
+        help="Language namespace: chooses data/<language>/ tree (default: arabic)",
+    )
+    p.add_argument(
+        "--mode",
+        choices=["dataset", "extended", "generate-ft_evals", "generate-api_evals"],
+        default="dataset",
+        help="dataset: evaluate existing training dataset using fixed 100-question file; extended: random sample of max(500,10%%) questions from dataset; generate-ft_evals: generate answers for fine-tuned models; generate-api_evals: generate answers for API models",
+    )
     # dataset only required for dataset/extended modes; we validate later
-    p.add_argument("--dataset", help="(dataset/extended modes) Existing dataset JSONL to evaluate (training_datasets). Not used for generate-* modes.")
+    p.add_argument(
+        "--dataset",
+        help="(dataset/extended modes) Existing dataset JSONL to evaluate (training_datasets). Not used for generate-* modes.",
+    )
     # questions file (not required for extended mode)
-    p.add_argument("--questions-file", help="Evaluation questions file (default auto for dataset mode: data/<language>/<prefix>eval_questions.txt). Not required for extended mode unless supplied.")
-    p.add_argument("--provider", choices=["openai", "together", "hf", "gemini", "grok"], help="(generation modes only) API provider to use for generation (required for generate-* modes)")
-    p.add_argument("--gen-model", help="(generation modes only) Provider model used to generate answers (required for generate-* modes)")
-    p.add_argument("--answers-label", help="Human-friendly label for the answers column (defaults: gen-model or inferred from dataset)")
-    p.add_argument("--judge-model", default="gpt-5-mini", help="Model used as evaluator (default: gpt-5-mini)")
-    p.add_argument("--use-system-prompt", action="store_true", help="Use MAIN_SYSTEM_PROMPT from language prompts module for generation (mainly for API evals)")
-    p.add_argument("--comparison-csv", help="Override comparison CSV filename (placed automatically in proper directory if relative)")
-    p.add_argument("--results-jsonl", help="Override results JSONL filename (auto directory based on mode & language if relative)")
-    p.add_argument("--output-dataset", help="(generation modes only) Output dataset filename (auto placed in ft_evals/api_evals if relative; default auto name)")
-    p.add_argument("--overwrite", action="store_true", help="Overwrite comparison CSV column if answers-label already present")
-    p.add_argument("--no-progress", action="store_true", help="Silence progress ticks during evaluation")
+    p.add_argument(
+        "--questions-file",
+        help="Evaluation questions file (default auto for dataset mode: data/<language>/<prefix>eval_questions.txt). Not required for extended mode unless supplied.",
+    )
+    p.add_argument(
+        "--provider",
+        choices=["openai", "together", "hf", "google", "xai"],
+        help="(generation modes only) API provider to use for generation (required for generate-* modes)",
+    )
+    p.add_argument(
+        "--gen-model",
+        help="(generation modes only) Provider model used to generate answers (required for generate-* modes)",
+    )
+    p.add_argument(
+        "--answers-label",
+        help="Human-friendly label for the answers column (defaults: gen-model or inferred from dataset)",
+    )
+    p.add_argument(
+        "--judge-model",
+        default="gpt-5-mini",
+        help="Model used as evaluator (default: gpt-5-mini)",
+    )
+    p.add_argument(
+        "--use-system-prompt",
+        action="store_true",
+        help="Use MAIN_SYSTEM_PROMPT from language prompts module for generation (mainly for API evals)",
+    )
+    p.add_argument(
+        "--system-prompt-label",
+        help="Optional label describing the system prompt or prompt version used for answer generation/evaluation",
+    )
+    p.add_argument(
+        "--comparison-csv",
+        help="Override comparison CSV filename (placed automatically in proper directory if relative)",
+    )
+    p.add_argument(
+        "--results-jsonl",
+        help="Override results JSONL filename (auto directory based on mode & language if relative)",
+    )
+    p.add_argument(
+        "--output-dataset",
+        help="(generation modes only) Output dataset filename (auto placed in ft_evals/api_evals if relative; default auto name)",
+    )
+    p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite comparison CSV column if answers-label already present",
+    )
+    p.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Silence progress ticks during evaluation",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Number of questions to evaluate (default: 100). Set to 0 for all.",
+    )
     return p.parse_args(argv)
+
 
 def infer_answers_label_from_dataset(path: Path) -> str | None:
     try:
-        with path.open('r', encoding='utf-8') as f:
+        with path.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -258,7 +414,7 @@ def infer_answers_label_from_dataset(path: Path) -> str | None:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                gen_model = obj.get('gen_model')
+                gen_model = obj.get("gen_model")
                 if isinstance(gen_model, str) and gen_model:
                     return gen_model
                 # fallback: maybe system message includes model label? skip for now
@@ -266,6 +422,27 @@ def infer_answers_label_from_dataset(path: Path) -> str | None:
     except FileNotFoundError:
         return None
     return None
+
+
+def infer_system_prompt_label_from_dataset(path: Path) -> str | None:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict):
+                    label = obj.get("system_prompt_label")
+                    if isinstance(label, str) and label:
+                        return label
+    except FileNotFoundError:
+        return None
+    return None
+
 
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
@@ -281,12 +458,15 @@ def main(argv: List[str]) -> int:
 
     # Infer questions file if not provided (not required for extended mode)
     prefix = "ar_" if args.language == "arabic" else "en_"
-    questions_file = args.questions_file or str(base_lang_dir / f"{prefix}eval_questions.txt")
+    questions_file = args.questions_file or str(
+        base_lang_dir / f"{prefix}eval_questions.txt"
+    )
     if args.mode != "extended" and not Path(questions_file).exists():
         raise SystemExit(f"Questions file not found: {questions_file}")
 
     # Determine answers label (may be overridden later if inferred from dataset)
     answers_label = args.answers_label
+    system_prompt_label = args.system_prompt_label
 
     # Comparison CSV path resolution
     if args.mode in ("dataset", "extended"):
@@ -295,7 +475,7 @@ def main(argv: List[str]) -> int:
         default_comp_csv = ft_evals_dir / "ft_evals_comparison.csv"
     else:  # generate-api_evals
         default_comp_csv = api_evals_dir / "api_evals_comparison.csv"
-        
+
     if args.comparison_csv:
         supplied = Path(args.comparison_csv)
         if supplied.is_absolute():
@@ -320,7 +500,7 @@ def main(argv: List[str]) -> int:
             raise SystemExit("--gen-model required for generation modes")
         if not answers_label:
             answers_label = args.gen_model
-            
+
         # Output dataset naming & placement
         if args.mode == "generate-ft_evals":
             output_dir = ft_evals_dir
@@ -328,15 +508,17 @@ def main(argv: List[str]) -> int:
         else:  # generate-api_evals
             output_dir = api_evals_dir
             auto_name = f"generated_api_{args.provider}_{sanitize_filename(args.answers_label)}.jsonl"
-            
+
         output_dataset_name = args.output_dataset or auto_name
         output_dataset_path = Path(output_dataset_name)
         if not output_dataset_path.is_absolute():
             output_dataset_path = output_dir / output_dataset_path.name
-            
+
         if output_dataset_path.exists():
             dataset_path = output_dataset_path
-            print(f"[generate] Re-using existing generated dataset (no regeneration): {dataset_path}")
+            print(
+                f"[generate] Re-using existing generated dataset (no regeneration): {dataset_path}"
+            )
         else:
             dataset_path = Path(
                 generate_dataset(
@@ -346,6 +528,8 @@ def main(argv: List[str]) -> int:
                     engine,
                     str(output_dataset_path),
                     args.use_system_prompt,
+                    limit=args.limit,
+                    system_prompt_label=args.system_prompt_label,
                 )
             )
             print(f"[generate] Dataset ready at {dataset_path}")
@@ -366,10 +550,18 @@ def main(argv: List[str]) -> int:
                 answers_label = inferred
                 print(f"[infer] Using inferred answers label: {answers_label}")
             else:
-                raise SystemExit("Provide --answers-label (could not infer from dataset).")
+                raise SystemExit(
+                    "Provide --answers-label (could not infer from dataset)."
+                )
+
+    if not system_prompt_label and dataset_path.exists():
+        inferred_prompt = infer_system_prompt_label_from_dataset(dataset_path)
+        if inferred_prompt:
+            system_prompt_label = inferred_prompt
+            print(f"[infer] Using inferred system prompt label: {system_prompt_label}")
 
     if not answers_label:
-        answers_label = 'answers'
+        answers_label = "answers"
 
     if args.mode == "extended":
         # Extended mode: random sample of questions directly from dataset
@@ -390,12 +582,17 @@ def main(argv: List[str]) -> int:
             sample_target = total_q
         sample_questions = random.sample(list(q_to_a.keys()), sample_target)
         pairs = [(q, q_to_a[q]) for q in sample_questions]
-        print(f"[extended] Selected random sample of {len(pairs)} questions (total available: {total_q}; target rule: max(500,10%={math.ceil(0.10*total_q)}))")
+        print(
+            f"[extended] Selected random sample of {len(pairs)} questions (total available: {total_q}; target rule: max(500,10%={math.ceil(0.10 * total_q)}))"
+        )
     elif generation_mode:
         # Generation evaluation: use question list; penalize missing answers by inserting empty answer strings
-        eval_questions = load_eval_questions(questions_file, limit=100)
+        limit_val = None if args.limit == 0 else args.limit
+        eval_questions = load_eval_questions(questions_file, limit=limit_val)
         if not eval_questions:
-            raise SystemExit("Questions file empty or unreadable for generation evaluation.")
+            raise SystemExit(
+                "Questions file empty or unreadable for generation evaluation."
+            )
         raw_pairs = load_qa_pairs(
             str(dataset_path),
             question_list_path=None,
@@ -412,16 +609,25 @@ def main(argv: List[str]) -> int:
                 pairs.append((q, q_to_a[q]))
             else:
                 missing += 1
-                pairs.append((q, ""))  # Placeholder blank answer -> evaluation engine will penalize
+                pairs.append(
+                    (q, "")
+                )  # Placeholder blank answer -> evaluation engine will penalize
         if missing:
-            print(f"[generate-eval] WARNING: {missing} missing answers inserted as empty strings (will be penalized).")
-        print(f"[generate-eval] Prepared {len(pairs)} question/answer pairs for evaluation.")
+            print(
+                f"[generate-eval] WARNING: {missing} missing answers inserted as empty strings (will be penalized)."
+            )
+        print(
+            f"[generate-eval] Prepared {len(pairs)} question/answer pairs for evaluation."
+        )
     else:
-        # Standard dataset mode: strict 100-question curated list
-        eval_questions = load_eval_questions(questions_file, limit=100)
+        # Standard dataset mode: strict curated list (default 100)
+        limit_val = None if args.limit == 0 else args.limit
+        eval_questions = load_eval_questions(questions_file, limit=limit_val)
         eval_set: Set[str] = set(eval_questions)
-        if len(eval_questions) != 100:
-            raise SystemExit(f"Evaluation questions file must contain 100 questions (got {len(eval_questions)}).")
+        if args.limit == 100 and len(eval_questions) != 100:
+            raise SystemExit(
+                f"Evaluation questions file must contain 100 questions (got {len(eval_questions)})."
+            )
 
         raw_pairs = load_qa_pairs(
             str(dataset_path),
@@ -434,27 +640,45 @@ def main(argv: List[str]) -> int:
                 q_to_a[q] = a
         missing = [q for q in eval_questions if q not in q_to_a]
         if missing:
-            raise SystemExit(f"Dataset missing {len(missing)} required questions. First missing: {missing[:3]}")
+            raise SystemExit(
+                f"Dataset missing {len(missing)} required questions. First missing: {missing[:3]}"
+            )
 
         pairs = [(q, q_to_a[q]) for q in eval_questions]
-        print(f"[load] Filtered {len(pairs)} evaluation pairs from dataset (strict 100-question set).")
+        print(
+            f"[load] Filtered {len(pairs)} evaluation pairs from dataset (strict 100-question set)."
+        )
 
     # Evaluate
-    print('[eval] Running evaluation...')
+    print("[eval] Running evaluation...")
     results = engine.batch_evaluate(pairs, limit=None, progress=not args.no_progress)
-    print('[eval] Done.')
+    print("[eval] Done.")
 
     # Aggregate
     include_arabic_accuracy = args.language == "arabic"
     aggregated = aggregate_scores(results, include_arabic_accuracy)
-    print('[summary] Aggregated means:')
+    print("[summary] Aggregated means:")
     for k in sorted(aggregated):
         print(f"  {k}: {aggregated[k]}")
 
     # Update comparison CSV
-    # Build rows order dynamically for this run (if file already exists we retain its structure via ensure_csv_structure)
-    rows_order = BASE_CSV_ROWS + (ARABIC_EXTRA_ROWS if include_arabic_accuracy else [])
-    update_comparison_csv(comparison_csv_path, answers_label, aggregated, overwrite=args.overwrite, rows_order=rows_order)
+    # Build rows order dynamically for this run (legacy rows preserved via ensure_csv_structure)
+    rows_order = build_rows_order(include_arabic_accuracy)
+    csv_meta_values: Dict[tuple[str, str], str] = {
+        ("Meta", "Judge_Model"): args.judge_model,
+        ("Meta", "Gen_Model"): args.gen_model if generation_mode else "N/A",
+        ("Meta", "Provider"): args.provider if generation_mode else "N/A",
+    }
+    if system_prompt_label:
+        csv_meta_values[("Meta", "System_Prompt_Label")] = system_prompt_label
+    update_comparison_csv(
+        comparison_csv_path,
+        answers_label,
+        aggregated,
+        overwrite=args.overwrite,
+        rows_order=rows_order,
+        meta_values=csv_meta_values,
+    )
 
     # Results JSONL placement (mode dependent)
     if args.mode in ("dataset", "extended"):
@@ -463,7 +687,7 @@ def main(argv: List[str]) -> int:
         default_results_dir = ft_evals_dir
     else:  # generate-api_evals
         default_results_dir = api_evals_dir
-        
+
     default_results_dir.mkdir(parents=True, exist_ok=True)
     if args.results_jsonl:
         supplied = Path(args.results_jsonl)
@@ -476,22 +700,24 @@ def main(argv: List[str]) -> int:
         results_jsonl = default_results_dir / filename
 
     meta = {
-        'dataset': str(dataset_path),
-        'answers_label': answers_label,
-        'judge_model': args.judge_model,
-        'gen_model': args.gen_model,
-        'provider': args.provider if generation_mode else None,
-        'use_system_prompt': args.use_system_prompt if generation_mode else None,
-        'questions_file': questions_file,
-        'language': args.language,
-        'mode': args.mode,
-        'extended_sample_size': len(pairs) if args.mode == 'extended' else None,
-        'comparison_csv': str(comparison_csv_path),
-        'timestamp': dt.now().isoformat(),
+        "dataset": str(dataset_path),
+        "answers_label": answers_label,
+        "judge_model": args.judge_model,
+        "gen_model": args.gen_model,
+        "provider": args.provider if generation_mode else None,
+        "use_system_prompt": args.use_system_prompt if generation_mode else None,
+        "system_prompt_label": system_prompt_label,
+        "questions_file": questions_file,
+        "language": args.language,
+        "mode": args.mode,
+        "extended_sample_size": len(pairs) if args.mode == "extended" else None,
+        "comparison_csv": str(comparison_csv_path),
+        "timestamp": dt.now().isoformat(),
     }
     append_results_jsonl(results_jsonl, results, meta)
-    print('[done] Completed.')
+    print("[done] Completed.")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))

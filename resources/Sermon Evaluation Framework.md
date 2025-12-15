@@ -252,7 +252,16 @@ Compute rolled‑up composite categories for dashboards by averaging related raw
 * Application_Effectiveness ≈ avg(Application.Clear & Practical, Redemptive Focus, Mandate vs Idea Distinction, Passage Supported, Main Points.Application Quality)
 * Structure_Cohesion ≈ avg(Main Points.Proportional & Coexistent, Conclusion.Summary, Conclusion.Compelling Exhortation, Conclusion.Climax, Conclusion.Pointed End)
 * Illustrations ≈ avg(Main Points.Illustration Quality, Illustrations.Lived-Body Detail, Illustrations.Strengthens Points, Illustrations.Proportion)
-* Overall_Impact ≈ avg(Textual_Fidelity, Proposition_Clarity, Application_Effectiveness, Structure_Cohesion, Illustrations, Introduction) - Duration_Penalty.
+* Overall_Impact_Base ≈ **weighted average** of the above six aggregates using "Pillars First" weights:
+  - Textual_Fidelity: **24%**
+  - Application_Effectiveness: **24%**
+  - Structure_Cohesion: **20%**
+  - Proposition_Clarity: **12%**
+  - Illustrations: **10%**
+  - Introduction: **10%**
+* Overall_Impact = Overall_Impact_Base - Duration_Penalty (clamped to 1.0 minimum).
+
+**Weighting Rationale:** The "Pillars First" scheme emphasizes the core evaluation pillars (Textual Purpose & Fidelity, Transformational Application, Structural Cohesion) which together account for 68% of the overall score. Proposition clarity remains significant at 12%, while introduction and illustrations are deliberately weighted lighter (10% each) to prevent rhetorically polished but theologically thin sermons from scoring artificially high. This ensures that faithful text handling, Christ-centered application, and structural integrity drive the Overall Impact score.
 
 **Duration Penalty Logic:**
 *   If duration < 35m: `Penalty = min((35 - minutes) / 10.0, 1.0)`
