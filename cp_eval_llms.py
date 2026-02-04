@@ -347,7 +347,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     )
     p.add_argument(
         "--provider",
-        choices=["openai", "together", "hf", "google", "xai"],
+        choices=["openai", "together", "hf", "google", "xai", "anthropic"],
         help="(generation modes only) API provider to use for generation (required for generate-* modes)",
     )
     p.add_argument(

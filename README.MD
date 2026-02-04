@@ -1,5 +1,7 @@
 <div align="center">
-	<img src="./imgs/LogoForHeader.png" alt="Calvinist Parrot" height="140" />
+    <a href="https://www.calvinistparrotministries.org">
+        <img src="./public/LogoForHeader.png" alt="Calvinist Parrot Ministries" height="140" />
+    </a>
 </div>
 
 # Multilingual Reformed Christian Q&A Dataset & Evaluation Toolkit
@@ -19,7 +21,7 @@ Building high‑quality, reformed, multilingual Q&A datasets for Calvinist Parro
 | Data Sources | Curated Arabic (and future English) Christian Q&A from GotQuestions + catechism material. |
 | Dataset Builder | `cp_create_dataset.py` merges sources and rewrites answers via a controllable ParrotAI chain. |
 | LLM Evaluation | `cp_eval_llms.py` generates or scores model answers on a fixed 100‑question evaluation set with rubric aggregation. |
-| Sermon Evaluation | `cp_eval_sermons.py` performs two‑step sermon evaluation (extraction + rubric scoring) from text transcripts or audio, with aggregated CSV and optional Markdown reports. |
+| Sermon Evaluation | `cp_eval_sermons.py` performs two‑step sermon evaluation (extraction + rubric scoring) from audio files, with aggregated CSV and optional Markdown reports. |
 | Outputs | Training JSONL (messages format), evaluation comparison CSV, per‑run JSONL judge results. |
 
 ---
@@ -58,7 +60,7 @@ data/
 parrot_ai/                          			# Core chain + evaluation engine components
 cp_create_dataset.py            				# Build / enrich training dataset
 cp_eval_llms.py                      			# Unified generation + evaluation CLI (language + mode aware)
-cp_eval_sermons.py                  			# Two‑step sermon evaluation (text or audio) with aggregated CSV + Markdown
+cp_eval_sermons.py                  			# Two‑step sermon evaluation (audio) with aggregated CSV + Markdown
 ```
 
 ---
@@ -94,11 +96,13 @@ Optional performance extras (Flash Attention) may require a compatible GPU + too
 Both `cp_create_dataset.py` and `cp_eval_llms.py` can read API credentials from a `.env` file (auto‑loaded if present). See the template: `.env.example`.
 
 Copy `.env.example` to `.env` and fill in any providers you will use:
+
 ```env
-HF_TOKEN=your_huggingface_token_here
-TOGETHER_API_KEY=your_together_api_key_here
-OPENAI_API_KEY=your_openai_api_key_here
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
 GEMINI_API_KEY=your_google_api_key_here
+HF_TOKEN=your_huggingface_token_here
+OPENAI_API_KEY=your_openai_api_key_here
+TOGETHER_API_KEY=your_together_api_key_here
 XAI_API_KEY=your_xai_api_key_here
 ```
 
@@ -239,10 +243,10 @@ more data\arabic\ar_training_dataset_gemma.jsonl
 | `dataset` | Evaluate a dataset against the canonical 100-question file (must contain all 100). |
 | `extended` | Evaluate a random sample from an existing dataset: sample size = max(500, 10% of unique questions) capped by dataset size (no external questions file required). |
 | `generate-ft_evals` | Generate answers (fine-tuned / custom models) via a provider, create a JSONL dataset, then evaluate it. |
-| `generate-api_evals` | Generate answers from hosted API models (OpenAI, Gemini, Grok, Together, HF Inference) then evaluate. |
+| `generate-api_evals` | Generate answers from hosted API models (OpenAI, Gemini, Grok, Together, HF Inference, Anthropic) then evaluate. |
 
 ### Provider & Model Handling
-Pass `--provider` plus `--gen-model` for generation modes. Supported providers (current code): `openai`, `together`, `hf`, `gemini`, `grok`.
+Pass `--provider` plus `--gen-model` for generation modes. Supported providers (current code): `openai`, `together`, `hf`, `google`, `xai`, `anthropic`.
 
 ### System Prompt
 Add `--use-system-prompt` in generation modes to prepend the language's `MAIN_SYSTEM_PROMPT` (looked up in `parrot_ai.prompts.<language>`). A copy of the system prompt (if used) is also written as a single JSON object line at the top of the generated dataset for traceability.
@@ -261,11 +265,13 @@ Each scored sub‑criterion appears as a row in the comparison CSV. Mean scores 
 ### Evaluation Question Sources
 | Mode | Question Source Rules |
 |------|-----------------------|
-| dataset | Requires canonical `data/<lang>/<prefix>eval_questions.txt` (exactly 100 lines). Any missing question aborts with an error. |
+| dataset | Requires canonical `data/<lang>/<prefix>eval_questions.txt`. **Arabic has 100 questions; English has 500 questions.** Any missing question aborts with an error. |
 | extended | Ignores canonical file unless you still pass `--questions-file`. Random sample drawn from the dataset itself. |
-| generate-* | Loads (by default) the canonical 100-question file (limit=100). If a generated dataset lacks an answer for a question, an empty answer placeholder is inserted and will score poorly. |
+| generate-* | Loads (by default) the canonical question file with `--limit 100`. **For English (500 questions), use `--limit 0` to evaluate all questions.** If a generated dataset lacks an answer for a question, an empty answer placeholder is inserted and will score poorly. |
 
 Canonical file auto-inferred unless you pass `--questions-file`. Prefix: `ar_` or `en_`.
+
+**CRITICAL**: The default `--limit` is 100. Since English has 500 canonical questions, all English evaluations must explicitly pass `--limit 0` to evaluate all questions and match existing comparison data.
 
 ### Key Arguments (Updated)
 | Flag | Applies To | Notes |
@@ -279,6 +285,7 @@ Canonical file auto-inferred unless you pass `--questions-file`. Prefix: `ar_` o
 | `--answers-label` | all | Column header for scores; inferred from dataset `gen_model` (dataset mode) or defaults to `--gen-model` for generation. |
 | `--judge-model` | all | Evaluation (judge) model. Default: `gpt-5-mini`. |
 | `--use-system-prompt` | generate-* | Prepend & log system prompt from prompts module. |
+| `--limit` | all | Number of questions to evaluate (default: 100). Use `--limit 0` for all questions. **English has 500 questions and requires `--limit 0`.** |
 | `--comparison-csv` | all | Override output CSV filename (stored in mode directory when relative). |
 | `--results-jsonl` | all | Override raw per-run JSONL results filename. |
 | `--output-dataset` | generate-* | Override generated dataset filename (stored in mode directory when relative). |
@@ -322,6 +329,7 @@ python cp_eval_llms.py --language arabic --mode generate-ft_evals ^
 	--gen-model meta-llama/Meta-Llama-3-8B-Instruct ^
 	--answers-label llama3-8b-ft ^
 	--use-system-prompt
+REM Note: Arabic has 100 questions (default --limit works); English would need --limit 0
 ```
 
 Generate & evaluate (Gemini, vanilla prompts):
@@ -330,6 +338,7 @@ python cp_eval_llms.py --language arabic --mode generate-api_evals ^
 	--provider gemini ^
 	--gen-model gemini-2.5-flash ^
 	--answers-label gemini-2.5-flash-vanilla
+REM Note: Arabic has 100 questions (default --limit works); English would need --limit 0
 ```
 
 Generate & evaluate (Gemini with system prompt):
@@ -339,6 +348,7 @@ python cp_eval_llms.py --language arabic --mode generate-api_evals ^
 	--gen-model gemini-2.5-flash ^
 	--answers-label gemini-2.5-flash-prompted ^
 	--use-system-prompt
+REM Note: Arabic has 100 questions (default --limit works); English would need --limit 0
 ```
 
 ### Viewing Aggregated Scores
@@ -416,7 +426,7 @@ For questions or support, please [reach out](contact@calvinistparrotministries.o
 **"For from Him and through Him and to Him are all things. To Him be the glory forever! Amen."**
 - Romans 11:36
 
-<div align="center">`
+<div align="center">
   <a href="https://copy.church/explain/importance/">
     <img src="https://copy.church/badges/lcc_alt_pde.png" alt="Copy.church" height="100" />
   </a>

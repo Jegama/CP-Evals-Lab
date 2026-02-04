@@ -460,7 +460,7 @@ class ParrotAIGemini(BaseParrotAI):
         model: Optional[str] = None,
         **kwargs,
     ) -> str:
-        model_to_use = model or self.model_name or "gemini-2.5-flash"
+        model_to_use = model or self.model_name or "gemini-3-flash"
 
         # Only apply system prompt if explicitly supplied
         if system is not None:
@@ -501,7 +501,7 @@ class ParrotAIGemini(BaseParrotAI):
         **kwargs,
     ) -> str:
         """Generate using raw contents list (e.g., [instruction, file])."""
-        model_to_use = model or self.model_name or "gemini-2.5-flash"
+        model_to_use = model or self.model_name or "gemini-3-flash"
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:
@@ -534,7 +534,7 @@ class ParrotAIGemini(BaseParrotAI):
         model: Optional[str] = None,
         seed: Optional[int] = 1689,
     ) -> dict:
-        model_to_use = model or self.model_name or "gemini-2.5-flash"
+        model_to_use = model or self.model_name or "gemini-3-flash"
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:
@@ -568,7 +568,7 @@ class ParrotAIGemini(BaseParrotAI):
         model: Optional[str] = None,
         seed: Optional[int] = 1689,
     ) -> dict:
-        model_to_use = model or self.model_name or "gemini-2.5-flash"
+        model_to_use = model or self.model_name or "gemini-3-flash"
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:
@@ -646,3 +646,99 @@ class ParrotAIGrok(BaseParrotAI):
                 "Type: xAI Grok API Client",
             ]
         )
+
+
+class ParrotAIClaude(BaseParrotAI):
+    """Anthropic Claude API wrapper for text generation."""
+
+    def __init__(self, language: str = "arabic"):
+        super().__init__(language)
+        try:
+            import anthropic  # type: ignore
+        except ImportError as e:  # pragma: no cover
+            raise ImportError(
+                "anthropic package not installed. Add it to requirements.txt"
+            ) from e
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            raise ValueError("ANTHROPIC_API_KEY must be set in environment variables")
+
+        self._client = anthropic.Anthropic()
+        self._anthropic = anthropic
+        print("Anthropic Claude client initialized")
+
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: int = 4096,
+        **kwargs,
+    ) -> str:
+        model_to_use = model or self.model_name or "claude-haiku-4-5-20251001"
+        if system is not None:
+            system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
+        else:
+            system_prompt = ""
+
+        messages = [{"role": "user", "content": prompt}]
+
+        create_kwargs = {
+            "model": model_to_use,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+        if system_prompt:
+            create_kwargs["system"] = system_prompt
+
+        response = self._client.messages.create(**create_kwargs)
+
+        # Extract text from response content blocks
+        text_parts = []
+        for block in response.content:
+            if hasattr(block, "text"):
+                text_parts.append(block.text)
+        return "".join(text_parts)
+
+    def get_model_info(self) -> str:
+        return "\n".join(
+            [
+                "Provider: anthropic",
+                f"Current Model: {self.model_name or 'Not set (will use default)'}",
+                "Type: Anthropic Claude API Client",
+            ]
+        )
+
+    def generate_structured(
+        self,
+        messages: list[dict[str, str]],
+        response_model: Any,
+        model: Optional[str] = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.0,
+    ) -> dict:
+        """Call messages.parse with a Pydantic response_model and return dict.
+
+        Uses Anthropic's structured outputs feature via the .parse() method.
+        Temperature defaults to 0 for deterministic outputs.
+        """
+        model_to_use = model or self.model_name or "claude-haiku-4-5-20251001"
+
+        client_any = cast(Any, self._client)
+        response = client_any.messages.parse(
+            model=model_to_use,
+            max_tokens=max_tokens,
+            messages=messages,
+            output_format=response_model,
+            temperature=temperature,
+        )
+
+        # Get parsed output and convert to dict
+        parsed = response.parsed_output
+        if parsed is None:
+            raise ValueError("Failed to parse structured Anthropic response")
+        if hasattr(parsed, "model_dump"):
+            return parsed.model_dump()
+        if isinstance(parsed, dict):
+            return parsed
+        # Fallback to JSON string parsing
+        return json.loads(parsed.model_dump_json())
