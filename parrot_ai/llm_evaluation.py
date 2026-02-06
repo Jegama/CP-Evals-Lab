@@ -16,6 +16,7 @@ from typing import List, Tuple, Dict, Any, Optional, Iterable, cast
 from openai import OpenAI
 from google import genai
 from google.genai import types
+import anthropic
 from tqdm import tqdm
 from dotenv import load_dotenv
 
@@ -29,6 +30,7 @@ from .core import (
     ParrotAIGemini,
     ParrotAIGrok,
     ParrotAIHF,
+    ParrotAIClaude,
 )
 
 load_dotenv()
@@ -418,14 +420,15 @@ class EvaluationEngine:
         self.model = model
         if model == DEFAULT_MODEL:
             self.client = client or OpenAI()
+        elif model.startswith("gemini"):
+            self.client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        elif model.startswith("claude"):
+            self.client = anthropic.Anthropic()
         else:
-            if model.startswith("gemini"):
-                self.client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-            else:
-                self.client = client or OpenAI()
-                print(
-                    f"Warning: Using non-default model '{model}' with OpenAI client may cause issues if the model is not supported."
-                )
+            self.client = client or OpenAI()
+            print(
+                f"Warning: Using non-default model '{model}' with OpenAI client may cause issues if the model is not supported."
+            )
         prompt_module_name = f"parrot_ai.prompts.{language}"
         self.prompts = importlib.import_module(prompt_module_name)
         required = ["EVAL_SYSTEM_PROMPT", "EVAL_INSTRUCTIONS"]
@@ -506,8 +509,9 @@ class EvaluationEngine:
             else EvaluationResultEnglish
         )
         if self.model.startswith("gemini"):
-            # Gemini path
-            cfg = types.GenerateContentConfig(
+            # Gemini path - cast types to Any to work around type stub limitations
+            types_any = cast(Any, types)
+            cfg = types_any.GenerateContentConfig(
                 seed=self.seed,
                 system_instruction=self.system_prompt,
                 response_mime_type="application/json",
@@ -544,6 +548,31 @@ class EvaluationEngine:
                     result_dict = json.loads(getattr(resp, "text", "") or "{}")
                 except json.JSONDecodeError as e:
                     raise ValueError(f"Failed to parse Gemini evaluation result: {e}")
+        elif self.model.startswith("claude"):
+            # Claude/Anthropic path using structured outputs
+            client_any = cast(Any, self.client)
+            messages = [
+                {"role": "user", "content": f"{self.instructions}\n\n{user_content}"},
+            ]
+            parse_kwargs: dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": 4096,
+                "messages": messages,
+                "output_format": response_model,
+                "temperature": 0.0,
+            }
+            if self.system_prompt:
+                parse_kwargs["system"] = self.system_prompt
+            response = client_any.messages.parse(**parse_kwargs)
+            parsed = response.parsed_output
+            if parsed is None:
+                raise ValueError("Failed to parse structured Anthropic evaluation response")
+            if hasattr(parsed, "model_dump"):
+                result_dict = parsed.model_dump()
+            elif isinstance(parsed, dict):
+                result_dict = parsed
+            else:
+                result_dict = json.loads(parsed.model_dump_json())
         else:
             client_any = cast(Any, self.client)
             completion = client_any.chat.completions.parse(
@@ -688,6 +717,7 @@ class EvaluationEngine:
             "hf": ParrotAIHF,
             "google": ParrotAIGemini,
             "xai": ParrotAIGrok,
+            "anthropic": ParrotAIClaude,
         }
 
         # Default models per provider
@@ -695,8 +725,9 @@ class EvaluationEngine:
             "openai": "gpt-5-mini",
             "together": "google/gemma-3-27b-it",
             "hf": "google/gemma-3-27b-it",
-            "gemini": "gemini-2.5-flash",
-            "grok": "grok-3-mini",
+            "google": "gemini-3-flash",
+            "xai": "grok-3-mini",
+            "anthropic": "claude-haiku-4-5-20251001",
         }
 
         if provider not in provider_classes:

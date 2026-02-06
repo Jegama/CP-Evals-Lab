@@ -45,7 +45,7 @@ class SermonEvaluationEngine:
     prompts module or extend routing.
     """
 
-    def __init__(self, model: str = "gemini-2.5-flash") -> None:
+    def __init__(self, model: str = "gemini-3-flash") -> None:
         self.provider_name = "gemini"
         self.model = model
         self.prompts = _load_sermon_prompts()
