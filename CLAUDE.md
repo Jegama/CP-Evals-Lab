@@ -68,17 +68,26 @@ Each language module provides: `MAIN_SYSTEM_PROMPT`, `CALVIN_SYS_PROMPT`, `reaso
 - `simple_chain()` - Single-step with system prompt
 - `comparative_chain()` - Generate with multiple system prompts
 
-### Evaluation Engine (`parrot_ai/llm_evaluation.py`)
+### Evaluation Engine (`parrot_ai/llm_evaluation.py` + `parrot_ai/llm_evals/`)
 Modes: `dataset`, `extended`, `generate-ft_evals`, `generate-api_evals`
+
+The main orchestrator lives in `llm_evaluation.py`. Helper functions are organized in the `llm_evals/` sub-package:
+- `data_loading.py` - `load_qa_pairs()`, `load_eval_questions()`
+- `arabic_heuristics.py` - Arabic purity penalty, Arabic ceiling-compression calibration
+- `english_heuristics.py` - English ceiling-compression calibration (Scripture citation, theological terminology, pastoral signals detection)
+- `score_processing.py` - Generic score clamping, knockouts, boldness adjustments
+
+All symbols are re-exported via `llm_evals/__init__.py` for backward compatibility.
 
 Heuristic pipeline order (do not reorder):
 1. Parse LLM response → Pydantic model
 2. Clamp scores to 1-5
 3. Apply Arabic purity penalty (if Arabic)
 4. Clamp overall scores
-5. Knockout checks
-6. Boldness adjustments
-7. Final clamp
+5. Apply ceiling-compression calibration (English or Arabic)
+6. Knockout checks
+7. Boldness adjustments
+8. Final clamp
 
 ### Sermon Evaluation (`parrot_ai/sermon_evaluation.py`)
 Two-step process:
@@ -126,12 +135,14 @@ Prefixes: `ar_` (Arabic), `en_` (English)
 
 ## Adding New Languages
 
-1. Create `parrot_ai/prompts/<lang>.py` with required prompts
+1. Create `parrot_ai/prompts/<lang>.py` with required prompts (must define `EVAL_SYSTEM_PROMPT` and `EVAL_INSTRUCTIONS` with behavioral anchors for all sub-criteria)
 2. Create `data/<lang>/` directory with:
    - `<prefix>eval_questions.txt` (exactly 100 questions)
    - Subdirectories: `training_datasets/`, `ft_evals/`, `api_evals/`
-3. Add language-specific heuristics to `llm_evaluation.py` if needed
-4. Update `evaluation_schemas.py` for any new rubric criteria
+3. Add language-specific heuristics module to `parrot_ai/llm_evals/` (e.g., `<lang>_heuristics.py` with evidence detection and `calibrate_<lang>_scores()`)
+4. Wire the calibration into `EvaluationEngine.evaluate()` with a language guard
+5. Update `evaluation_schemas.py` for any new rubric criteria
+6. Add unit tests in `tests/test_<lang>_heuristics.py`
 
 ## Environment Variables
 

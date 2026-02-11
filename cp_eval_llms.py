@@ -91,6 +91,8 @@ ARABIC_ACCURACY_SUBCRITERIA = [
     "Overall",
 ]
 
+FINAL_OVERALL_ROW = ("", "Final_Overall")
+
 META_ROWS = [
     ("Meta", "System_Prompt_Label"),
     ("Meta", "Judge_Model"),
@@ -105,6 +107,7 @@ def build_rows_order(include_arabic: bool) -> list[tuple[str, str]]:
     if include_arabic:
         for sub in ARABIC_ACCURACY_SUBCRITERIA:
             rows.append(("Arabic_Accuracy", sub))
+    rows.append(FINAL_OVERALL_ROW)
     for section, sub in META_ROWS:
         rows.append((section, sub))
     return rows
@@ -213,7 +216,19 @@ def aggregate_scores(
                     continue
                 agg[(section, key)] = agg.get((section, key), 0) + val
                 counts[(section, key)] = counts.get((section, key), 0) + 1
-    return {k: round(agg[k] / counts[k], 2) for k in agg if counts.get(k)}
+    means = {k: round(agg[k] / counts[k], 2) for k in agg if counts.get(k)}
+
+    # Compute Final_Overall as average of all section Overalls
+    overall_values = [
+        means[(s, "Overall")]
+        for s in target_sections
+        if (s, "Overall") in means
+    ]
+    if overall_values:
+        means[("", "Final_Overall")] = round(
+            sum(overall_values) / len(overall_values), 2
+        )
+    return means
 
 
 def ensure_csv_structure(
