@@ -1,6 +1,6 @@
 <div align="center">
     <a href="https://www.calvinistparrotministries.org">
-        <img src="./public/LogoForHeader.png" alt="Calvinist Parrot Ministries" height="140" />
+        <img src="./imgs/LogoForHeader.png" alt="Calvinist Parrot Ministries" height="140" />
     </a>
 </div>
 
