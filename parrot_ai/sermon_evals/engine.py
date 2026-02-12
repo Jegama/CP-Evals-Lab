@@ -2,7 +2,7 @@
 
 Provides two-step evaluation per resources/Sermon Evaluation Framework.md:
  - Step 1: Structural extraction into JSON (deterministic)
- - Step 2: Analytical scoring with 1–5 rubric
+ - Step 2: Analytical scoring with 1-5 rubric
 
 Provider: Gemini only (supports both text and audio via Files API)
  - Text: transcript input
@@ -18,22 +18,22 @@ from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
-from .evaluation_schemas import (
+from ..evaluation_schemas import (
     SermonExtractionStep1,
     SermonScoringStep2,
     SermonScoringStep2Raw,
 )
-from .core import ParrotAIGemini
-from .sermon_audio_utils import AudioFileManager
-from .sermon_calibration import SermonScoreCalibrator
-from .sermon_aggregation import SermonAggregator
-from .sermon_harmonization import SermonHarmonizer
+from ..core import ParrotAIGemini
+from .audio_utils import AudioFileManager
+from .calibration import SermonScoreCalibrator
+from .aggregation import SermonAggregator
+from .harmonization import SermonHarmonizer
 
 load_dotenv()
 
 
 def _load_sermon_prompts():
-    from .prompts import sermon as prompts
+    from ..prompts import sermon as prompts
 
     return prompts
 
@@ -161,8 +161,9 @@ class SermonEvaluationEngine:
             Scoring_Confidence=raw_scoring.Scoring_Confidence,
         )
 
-        # Apply post-processing pipeline
+        # Apply post-processing pipeline: strict -> ceiling compression -> aggregates -> duration
         scoring = self.calibrator.apply_strict_calibration(scoring, extraction)
+        scoring = self.calibrator.apply_ceiling_compression(scoring, extraction)
         scoring.Aggregated_Summary = self.aggregator.compute_aggregates(
             scoring, extraction
         )
@@ -198,7 +199,7 @@ class SermonEvaluationEngine:
         num_runs: int,
     ) -> None:
         """Generate and attach aggregate feedback to scoring.
-        
+
         Delegates to harmonizer's implementation to avoid code duplication.
         """
         self.harmonizer._generate_aggregate_feedback(scoring, extraction, num_runs)

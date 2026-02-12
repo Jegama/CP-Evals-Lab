@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .evaluation_schemas import (
+from ..evaluation_schemas import (
     SermonExtractionStep1,
     SermonScoringStep2,
     AggregatedSummary,
@@ -25,7 +25,7 @@ class SermonAggregator:
     @staticmethod
     def avg(vals):
         """Calculate average of non-None values.
-        
+
         Returns 1.0 as fallback if all values are None (minimum score on 1-5 scale).
         Logs warning when fallback is used to help identify missing data issues.
         """
@@ -48,13 +48,16 @@ class SermonAggregator:
         - Illustrations: 10%
         - Introduction: 10%
         """
-        # Component rollups (all on 1–5 scale)
+        # Component rollups (all on 1-5 scale)
         textual_fidelity = self.avg(
             [
                 scoring.Exegetical_Support.Alignment_with_Text,
                 scoring.Exegetical_Support.Handles_Difficulties,
                 scoring.Exegetical_Support.Proof_Accuracy_and_Clarity,
                 scoring.Exegetical_Support.Context_and_Genre_Considered,
+                scoring.Exegetical_Support.Not_Belabored,
+                scoring.Exegetical_Support.Aids_Rather_Than_Impresses,
+                scoring.Main_Points.Exposition_Quality,
             ]
         )
 
@@ -80,15 +83,18 @@ class SermonAggregator:
                 scoring.Application.Mandate_vs_Idea_Distinction,
                 scoring.Application.Passage_Supported,
                 scoring.Main_Points.Application_Quality,
+                scoring.Conclusion.Compelling_Exhortation,
+                scoring.Conclusion.Climax,
             ]
         )
 
         structure_cohesion = self.avg(
             [
+                scoring.Proposition.Establishes_Main_Theme,
                 scoring.Main_Points.Proportional_and_Coexistent,
+                scoring.Main_Points.Clarity,
+                scoring.Main_Points.Hortatory_Universal_Truths,
                 scoring.Conclusion.Summary,
-                scoring.Conclusion.Compelling_Exhortation,
-                scoring.Conclusion.Climax,
                 scoring.Conclusion.Pointed_End,
             ]
         )

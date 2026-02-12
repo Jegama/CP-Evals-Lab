@@ -86,8 +86,8 @@ For each main point:
 * **Subpoints** – Coherent logical development; if absent, note consciously.
 * **Illustrations** – Relevant, accurate, and in service of the point—not entertainment; **Scripture quotations are NOT illustrations**.
 * **Application** – Specific, grace‑motivated, heart + life oriented (not generic moralism).
-* **Comments** – Evaluate exegesis fidelity, clarity, progression toward climax, over‑proof‑texting risks, handling of original audience.
-* **Feedback** – Constructive, actionable coaching (what to refine, add, trim, rephrase, or reorder).
+* **Comments** – Evaluate exegesis fidelity, clarity, progression toward climax, over‑proof‑texting risks, handling of original audience. **Identify structural red flags:** Do points repeat a theme in different spheres without progression? Does a final point introduce an orphan theme? Do points merely follow verse sequence without unifying logic?
+* **Feedback** – Constructive, actionable coaching (what to refine, add, trim, rephrase, or reorder). **Call out fragmentation:** If the sermon feels like multiple mini-sermons or verse-by-verse commentary, name it explicitly and suggest how to unify around a single climactic move.
 
 ### 5. Conclusion
 
@@ -98,7 +98,11 @@ For each main point:
 ### 6. General Comments
 
 * **Content Comments** – Doctrinal substance? Faithful synthesis? Christ and Gospel explicit where warranted?
-* **Structure Comments** – Logical flow, unity, escalation, transitions, balance of explanation vs. application.
+* **Structure Comments** – Logical flow, unity, escalation, transitions, balance of explanation vs. application. **Critical structural analysis (required):** 
+  - **Examine for thematic repetition:** Do 2+ points repeat the same action verb in different contexts (e.g., "Submit to X", "Submit to Y")? If yes, explicitly state: "Points 1-2 repeat the same imperative in different spheres without theological progression."
+  - **Check for orphan points:** Does the final point introduce a major new theme (especially Christology/gospel) that wasn't developed in prior points? If yes, explicitly state: "Point 3 introduces [theme] as an orphan; it feels disconnected from the progression of Points 1-2."
+  - **Test unity:** Can the points be reordered without loss of logic? If yes, they lack progressive structure. State this explicitly.
+  - **Identify verse-by-verse exposition:** If points simply follow textual sequence without a unifying argument, state: "Structure follows verse order but lacks homiletical argument; feels more like commentary than sermon."
 * **Explanation Comments** – Depth of exegesis, context (historical, literary), handling of difficult phrases, theological integration.
 
 ### 7. Fallen Condition Focus (FCF)
@@ -155,7 +159,7 @@ Feedback: Strengths + surgical improvements.
 Sub‑Criteria:
 1. **Clarity** *(Succinct, memorable phrasing—typically ≤12 words.)*
 2. **Hortatory Universal Truths** *(States timeless truths that call hearers to trust/obey—**not** mere narrative recap)*
-3. **Proportional & Coexistent** *(balanced coverage across points; each point meaningfully advances the single proposition; no orphan points; points logically parallel, not redundant)*
+3. **Proportional & Coexistent** *(each point meaningfully ADVANCES the single proposition through distinct theological moves—not repetition in different spheres or orphan points; points build toward climax, not just cover consecutive verses)*
 4. **Exposition Quality** *(Explains text meaning in context before application.)*
 5. **Illustration Quality** *(Illustrations illuminate the stated point & remain proportionate.)*
 6. **Application Quality** *(Specific, grace‑motivated, heart + life oriented.)*
@@ -249,7 +253,33 @@ Key requirements (compliance checklist):
 Tie-breakers (to improve calibration):
 - When in doubt, default to the lower score. Challenge the sermon to earn a high score.
 - Use 3 as a true midpoint (adequate), not a soft pass. A sermon full of 3s is a sermon with significant potential for growth.
-- **Evidence Requirement:** For every score other than 3, you must be able to point to specific evidence in the extraction."""
+- **Evidence Requirement:** For every score other than 3, you must be able to point to specific evidence in the extraction.
+
+### Red Flags for Main_Points.Proportional_and_Coexistent (Common Structural Failures)
+
+Watch for these patterns that masquerade as cohesive structure but actually reveal fragmentation:
+
+**1. Thematic Repetition Across Spheres (score ≤2)**
+- Multiple points repeat the same theme in different contexts without progression
+- Example: "Submit to government" + "Submit in workplace" + "Submit at home" = repetition, not development
+- Test: If you can swap point order without loss of logic, they aren't building toward anything
+
+**2. Orphan Final Point (score ≤3)**
+- Last point introduces a new major theme disconnected from prior points
+- Example: Points 1-2 about "submission," then Point 3 suddenly shifts to "Christ's suffering" without bridging the FCF
+- Test: If the final point feels like a different sermon tacked on, penalize Proportional_and_Coexistent
+
+**3. Verse-by-Verse Exposition Disguised as Structure (score ≤2)**
+- Points follow textual sequence but lack unifying proposition
+- Example: "Paul talks about X in v.1-5, then Y in v.6-10, then Z in v.11-15" = commentary, not sermon
+- Test: Remove verse numbers from points—do they still form a logical argument?
+
+**4. Multiple Competing Propositions (score ≤2)**
+- Sermon tries to say two things, resulting in disjointed points
+- Example: Proposition about "submission" but final point is really about "Christ's atonement"
+- Test: If you need "Part 1" and "Part 2" labels, you have two sermons
+
+When any of these patterns appear, **cap Proportional_and_Coexistent at 3 (or lower).** A truly cohesive sermon has points that BUILD toward a single climax, not just cover consecutive verses or repeat a theme in different settings."""
 
 # ------------------------- Multi-Run Harmonization Prompts -------------------------
 
@@ -317,11 +347,11 @@ Actionable Feedback Examples:
 - Use: "Introduction was 2.00 (from 'FCF Introduced' and 'Arouses Attention'). For your next outline, write the FCF at the top and ensure each main point explicitly advances its resolution in Christ."
 
 Metric derivations reminder:
-* Textual_Fidelity ≈ avg(Exegetical Support.Alignment with Text, Handles Difficulties, Proof Accuracy & Clarity, Context & Genre Considered)
+* Textual_Fidelity ≈ avg(Exegetical Support.*, Main_Points.Exposition_Quality)
 * Proposition_Clarity ≈ avg(Proposition.Principle_and_Application_Wed, Proposition.Establishes_Main_Theme, Proposition.Summarizes_Introduction)
 * Introduction ≈ avg(Introduction.FCF_Introduced, Introduction.Arouses_Attention)
-* Application_Effectiveness ≈ avg(Application.Clear_and_Practical, Application.Redemptive_Focus, Application.Mandate_vs_Idea_Distinction, Application.Passage_Supported, Main_Points.Application_Quality)
-* Structure_Cohesion ≈ avg(Main_Points.Proportional_and_Coexistent, Conclusion.Summary, Conclusion.Compelling_Exhortation, Conclusion.Climax, Conclusion.Pointed_End)
+* Application_Effectiveness ≈ avg(Application.*, Main_Points.Application_Quality, Conclusion.Compelling_Exhortation, Conclusion.Climax)
+* Structure_Cohesion ≈ avg(Prop.Establishes_Main_Theme, Main_Points.Proportional_and_Coexistent, Main_Points.Clarity, Main_Points.Hortatory_Universal_Truths, Conclusion.Summary, Conclusion.Pointed_End)
 * Illustrations ≈ avg(Main_Points.Illustration_Quality, Illustrations.Lived_Body_Detail, Illustrations.Strengthens_Points, Illustrations.Proportion)
 * Overall_Impact = **weighted average** using "Pillars First" weights:
   - Textual_Fidelity × 0.24

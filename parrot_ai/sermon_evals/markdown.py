@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from .evaluation_schemas import (
+from ..evaluation_schemas import (
     SermonExtractionStep1,
     SermonScoringStep2,
 )
@@ -126,7 +126,7 @@ Feedback: {_fmt_opt(p.Feedback)}
 |---|---:|
 {rows}
 
-Overall: {overall}  
+Overall: {overall}
 Feedback: {_fmt_opt(feedback)}
 """.strip()
 
@@ -231,10 +231,10 @@ Feedback: {_fmt_opt(feedback)}
     md = f"""
 # {title}
 
-Generated: {ts}  
-Model: {model or "-"}  
-Extraction Confidence: {extraction.Extraction_Confidence}  
-Scoring Confidence: {scoring.Scoring_Confidence}
+Generated: {ts} 
+Model: {model or "-"} 
+Extraction Confidence: {extraction.Extraction_Confidence} 
+Scoring Confidence: {scoring.Scoring_Confidence} 
 {methodology_md}
 {agg_md}
 
