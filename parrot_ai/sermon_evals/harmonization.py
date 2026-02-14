@@ -15,15 +15,15 @@ import json
 from typing import Any, List, Optional, Protocol
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .evaluation_schemas import (
+from ..evaluation_schemas import (
     SermonExtractionStep1,
     SermonScoringStep2,
     SermonScoringStep2Raw,
     AggregatedSummaryFeedback,
 )
-from .sermon_aggregation import SermonAggregator
-from .sermon_calibration import SermonScoreCalibrator
-from .sermon_audio_utils import AudioFileManager
+from .aggregation import SermonAggregator
+from .calibration import SermonScoreCalibrator
+from .audio_utils import AudioFileManager
 
 # Configuration constants for multi-run evaluation
 SCORING_SEEDS = [
@@ -68,19 +68,19 @@ class PromptsProtocol(Protocol):
 
     @property
     def SCORING_INSTRUCTIONS(self) -> str: ...
-    
+
     @property
     def SCORING_SYSTEM_PROMPT(self) -> str: ...
-    
+
     @property
     def HARMONIZE_INSTRUCTIONS(self) -> str: ...
-    
+
     @property
     def HARMONIZE_SYSTEM_PROMPT(self) -> str: ...
-    
+
     @property
     def AGG_SUMMARY_INSTRUCTIONS(self) -> str: ...
-    
+
     @property
     def AGG_SUMMARY_SYSTEM_PROMPT(self) -> str: ...
 
@@ -146,12 +146,12 @@ class SermonHarmonizer:
         Uses ThreadPoolExecutor for parallel API calls. Retries failed runs up to 2 batches
         until num_runs successful results are obtained. Returns harmonized scoring with
         averaged integers and synthesized feedback.
-        
+
         Args:
             extraction: Step 1 extraction results
             audio_file_obj: Optional audio file object for Gemini API
             num_runs: Number of parallel scoring runs (must be 1-9)
-            
+
         Raises:
             ValueError: If num_runs is invalid
         """
@@ -162,7 +162,7 @@ class SermonHarmonizer:
                 f"num_runs ({num_runs}) exceeds available seeds ({len(SCORING_SEEDS)}). "
                 f"Maximum supported is {len(SCORING_SEEDS)}"
             )
-        
+
         print(
             f"[sermons] Running {num_runs} parallel scoring runs for self-consistency..."
         )
@@ -238,7 +238,7 @@ class SermonHarmonizer:
             return max(1, min(5, round(avg)))
 
         # Average all integer rubric fields with confidence weighting
-        from .evaluation_schemas import (
+        from ..evaluation_schemas import (
             IntroductionScores,
             PropositionScores,
             MainPointsScores,
@@ -447,8 +447,9 @@ class SermonHarmonizer:
             Scoring_Confidence=averaged.Scoring_Confidence,
         )
 
-        # Apply calibration, aggregates, duration penalty
+        # Apply calibration pipeline: strict -> ceiling compression -> aggregates -> duration
         scoring = self.calibrator.apply_strict_calibration(scoring, extraction)
+        scoring = self.calibrator.apply_ceiling_compression(scoring, extraction)
         scoring.Aggregated_Summary = self.aggregator.compute_aggregates(
             scoring, extraction
         )

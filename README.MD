@@ -1,24 +1,24 @@
 <div align="center">
     <a href="https://www.calvinistparrotministries.org">
-        <img src="./public/LogoForHeader.png" alt="Calvinist Parrot Ministries" height="140" />
+        <img src="./imgs/LogoForHeader.png" alt="Calvinist Parrot Ministries" height="140" />
     </a>
 </div>
 
-# Multilingual Reformed Christian Q&A Dataset & Evaluation Toolkit
+# Multilingual Reformed Christian Q&A & Sermon Evaluation Toolkit
 
-* **Purpose**: Curate and refine doctrinally faithful Q&A datasets. 
-* **Audience**: Ministries, researchers, model fine‑tuners. 
-* **Differentiators**: Reformed theological guardrails, multi‑criteria rubric (adherence, pastoral tone, interfaith sensitivity, linguistic accuracy), multilingual roadmap.
-* **Outputs**: Training JSONL, generation/eval scripts, aggregated score matrix, raw judge logs.
+* **Purpose**: Build doctrinally faithful Q&A datasets, evaluate LLM responses across providers, and assess sermon homiletics.
+* **Audience**: Ministries, researchers, model fine-tuners, preachers.
+* **Differentiators**: Reformed theological guardrails, multi-criteria rubric with behavioral anchors (adherence, pastoral tone, interfaith sensitivity, linguistic accuracy), ceiling-compression calibration heuristics, multilingual Q&A evaluation (Arabic + English), language-agnostic sermon audio evaluation.
+* **Outputs**: Training JSONL, LLM evaluation comparison CSVs, per-run judge logs, sermon scoring reports (JSON + Markdown).
 
-Building high‑quality, reformed, multilingual Q&A datasets for Calvinist Parrot Ministries.
+Three evaluation pipelines for Calvinist Parrot Ministries: Q&A dataset scoring, API model benchmarking, and sermon homiletics assessment.
 
 ---
 
 ## What This Repo Provides
 | Area | Purpose |
 |------|---------|
-| Data Sources | Curated Arabic (and future English) Christian Q&A from GotQuestions + catechism material. |
+| Data Sources | Curated Arabic and English Christian Q&A from GotQuestions + catechism material. |
 | Dataset Builder | `cp_create_dataset.py` merges sources and rewrites answers via a controllable ParrotAI chain. |
 | LLM Evaluation | `cp_eval_llms.py` generates or scores model answers on a fixed 100‑question evaluation set with rubric aggregation. |
 | Sermon Evaluation | `cp_eval_sermons.py` performs two‑step sermon evaluation (extraction + rubric scoring) from audio files, with aggregated CSV and optional Markdown reports. |
@@ -54,10 +54,15 @@ data/
 			api_eval_comparison.csv        		# Aggregated rubric means (API mode)
 			eval_results_*.jsonl	      		# Raw judge outputs for API evaluations
 			generated_*.jsonl              		# Auto-created datasets from API generation
-	english/	                          		# (Future expansion: mirrors arabic/ layout)
+	english/	                          		# English Q&A data (500 eval questions, mirrors arabic/ layout)
 	sermons                      	  			# Example sermon audio inputs (mp3, wav, m4a)
 	sermons_evals                 	 			# Sermon evaluation outputs (step1/step2 JSON, aggregated CSV, Markdown)
 parrot_ai/                          			# Core chain + evaluation engine components
+	llm_evals/                      			# Evaluation sub-package (heuristics, score processing, data loading)
+		arabic_heuristics.py        			# Arabic purity penalty + ceiling-compression calibration
+		english_heuristics.py       			# English ceiling-compression calibration (Scripture, theology, pastoral detection)
+		score_processing.py         			# Generic score clamping, knockouts, boldness adjustments
+		data_loading.py             			# QA pair and evaluation question loaders
 cp_create_dataset.py            				# Build / enrich training dataset
 cp_eval_llms.py                      			# Unified generation + evaluation CLI (language + mode aware)
 cp_eval_sermons.py                  			# Two‑step sermon evaluation (audio) with aggregated CSV + Markdown
@@ -260,7 +265,9 @@ Base criteria (all languages):
 Arabic adds (when `--language arabic`):
 - Arabic_Accuracy: Grammar_and_Syntax, Theological_Nuance, Contextual_Clarity, Consistency_of_Terms, Arabic_Purity
 
-Each scored sub‑criterion appears as a row in the comparison CSV. Mean scores are rounded to 2 decimals. Missing (non‑scored) pairs are skipped; blank answers (e.g., missing generations) are penalized by the evaluation engine.
+Each scored sub-criterion appears as a row in the comparison CSV. Mean scores are rounded to 2 decimals. Missing (non-scored) pairs are skipped; blank answers (e.g., missing generations) are penalized by the evaluation engine.
+
+**Ceiling-Compression Calibration:** Both English and Arabic evaluations apply post-processing heuristics that detect observable evidence in the answer text (Scripture citations, theological terminology, pastoral signals) and cap inflated scores when evidence is absent. This prevents score clustering near 5/5 on Adherence and Kindness dimensions. See `resources/English Evaluation Framework.md` and `resources/Arabic Evaluation Framework.md` for details.
 
 ### Evaluation Question Sources
 | Mode | Question Source Rules |
@@ -384,20 +391,18 @@ Extended mode uses Python's `random.sample`; set `PYTHONHASHSEED` and optionally
 
 ---
 
-## Future: English Expansion
-Planned additions:
-* Parallel `en_eval_questions.txt` (500 canonical English questions)
-* Unified bilingual evaluation matrix
-* Cross-lingual consistency scoring (e.g., doctrinal alignment across languages)
+## English Evaluation (Active)
+English evaluation is fully operational with:
+* `en_eval_questions.txt` (500 canonical English questions)
+* Detailed behavioral anchors (5/3/1 scoring descriptions) for all Adherence, Kindness, and Interfaith sub-criteria in `EVAL_INSTRUCTIONS`
+* Ceiling-compression calibration heuristics (Scripture citation detection, theological terminology checks, pastoral signal detection)
+* Full parity with Arabic evaluation pipeline (minus Arabic_Accuracy dimension)
+
+**Reminder:** English has 500 questions; always use `--limit 0` for English evaluations.
 
 ---
 
 ## Roadmap (Language Expansion Focus)
-Near Term (English):
-* Add `data/english/` parity: ensure `en_gotquestions.json`, `en_qa_catechism.jsonl`, and canonical `en_eval_questions.txt` (100 questions) are finalized and documented.
-* Run first English baseline evaluations using existing rubric (temporary direct reuse) and note any rubric wording needing neutral language adjustments.
-* Update scripts (if needed) to auto-detect `--lang en` via file path conventions.
-
 Mid Term (Spanish):
 * Introduce `data/spanish/` with `es_gotquestions.json`, `es_qa_catechism.jsonl`, `es_eval_questions.txt` (100 questions).
 * Light rubric localization (tone & cultural sensitivity phrasing) while keeping scoring math identical.

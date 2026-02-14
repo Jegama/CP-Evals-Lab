@@ -49,6 +49,10 @@ from parrot_ai.llm_evaluation import (
     load_qa_pairs,
     load_eval_questions,
 )
+from parrot_ai.evaluation_schemas import (
+    SUBCRITERIA_FLAG_MAP,
+    ALWAYS_ON_SUBCRITERIA,
+)
 
 CORE_SECTION_ORDER = [
     "Adherence",
@@ -91,6 +95,8 @@ ARABIC_ACCURACY_SUBCRITERIA = [
     "Overall",
 ]
 
+FINAL_OVERALL_ROW = ("", "Final_Overall")
+
 META_ROWS = [
     ("Meta", "System_Prompt_Label"),
     ("Meta", "Judge_Model"),
@@ -105,6 +111,7 @@ def build_rows_order(include_arabic: bool) -> list[tuple[str, str]]:
     if include_arabic:
         for sub in ARABIC_ACCURACY_SUBCRITERIA:
             rows.append(("Arabic_Accuracy", sub))
+    rows.append(FINAL_OVERALL_ROW)
     for section, sub in META_ROWS:
         rows.append((section, sub))
     return rows
@@ -112,6 +119,22 @@ def build_rows_order(include_arabic: bool) -> list[tuple[str, str]]:
 
 def sanitize_filename(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", name)
+
+
+def _load_system_prompt(engine: EvaluationEngine, use_system_prompt: bool) -> Optional[str]:
+    """Load the language-specific system prompt if requested."""
+    if not use_system_prompt:
+        return None
+    try:
+        prompt_module = importlib.import_module(
+            f"parrot_ai.prompts.{engine.language}"
+        )
+        return getattr(prompt_module, "MAIN_SYSTEM_PROMPT", None)
+    except (ImportError, AttributeError):
+        print(
+            f"[warning] Could not load system prompt for language '{engine.language}', proceeding without system prompt"
+        )
+        return None
 
 
 def generate_dataset(
@@ -131,17 +154,7 @@ def generate_dataset(
         raise SystemExit("No questions loaded for generation.")
 
     # Get system prompt if requested
-    system_prompt = None
-    if use_system_prompt:
-        try:
-            prompt_module = importlib.import_module(
-                f"parrot_ai.prompts.{engine.language}"
-            )
-            system_prompt = getattr(prompt_module, "MAIN_SYSTEM_PROMPT", None)
-        except (ImportError, AttributeError):
-            print(
-                f"[warning] Could not load system prompt for language '{engine.language}', proceeding without system prompt"
-            )
+    system_prompt = _load_system_prompt(engine, use_system_prompt)
 
     # Generate responses using the unified method
     responses = engine.generate_responses(
@@ -190,18 +203,67 @@ def generate_dataset(
     return str(out_path)
 
 
+def _build_flag_to_subcriteria_index() -> Dict[tuple, str]:
+    """Build reverse map: (section, subcriteria) -> flag_name."""
+    reverse: Dict[tuple, str] = {}
+    for flag_name, pairs in SUBCRITERIA_FLAG_MAP.items():
+        for pair in pairs:
+            reverse[pair] = flag_name
+    return reverse
+
+
+_SUBCRITERIA_TO_FLAG = _build_flag_to_subcriteria_index()
+
+
+def _is_applicable(
+    section: str, key: str, question_tag: Optional[dict]
+) -> bool:
+    """Check if a (section, key) subcriteria is applicable for a given question tag.
+
+    Returns True (include score) if:
+    - No question tag provided (backward compat)
+    - The subcriteria is always-on (Biblical_Basis, Consistency, Tone)
+    - The subcriteria's controlling flag is True in the tag
+    - The key is "Overall" (handled separately in recomputation)
+    """
+    if question_tag is None:
+        return True
+    if key == "Overall":
+        return False  # Overalls are recomputed from applicable subcriteria
+    pair = (section, key)
+    if pair in ALWAYS_ON_SUBCRITERIA:
+        return True
+    flag_name = _SUBCRITERIA_TO_FLAG.get(pair)
+    if flag_name is None:
+        return True  # Unknown subcriteria -> include (fail open)
+    return bool(question_tag.get(flag_name, True))
+
+
 def aggregate_scores(
-    results: List[dict], include_arabic_accuracy: bool
+    results: List[dict],
+    include_arabic_accuracy: bool,
+    question_tags: Optional[Dict[str, dict]] = None,
 ) -> Dict[tuple, float]:
     agg: Dict[tuple, float] = {}
     counts: Dict[tuple, int] = {}
+    # For section overall recomputation: track per-section subcriteria sums
+    section_sub_agg: Dict[str, Dict[str, float]] = {}
+    section_sub_counts: Dict[str, Dict[str, int]] = {}
+
     target_sections = ["Adherence", "Kindness_and_Gentleness", "Interfaith_Sensitivity"]
     if include_arabic_accuracy:
         target_sections.append("Arabic_Accuracy")
+
+    use_tags = question_tags is not None and len(question_tags) > 0
+
     for item in results:
         ev = item.get("evaluation")
         if not ev:
             continue
+        # Look up question tag if available
+        question_text = item.get("question", "")
+        q_tag = question_tags[question_text] if (use_tags and question_tags and question_text in question_tags) else None
+
         for section in target_sections:
             section_obj = ev.get(section, {})
             if not isinstance(section_obj, dict):
@@ -211,9 +273,54 @@ def aggregate_scores(
                     continue
                 if not isinstance(val, int):
                     continue
+
+                if use_tags and section != "Arabic_Accuracy":
+                    if not _is_applicable(section, key, q_tag):
+                        continue
+
                 agg[(section, key)] = agg.get((section, key), 0) + val
                 counts[(section, key)] = counts.get((section, key), 0) + 1
-    return {k: round(agg[k] / counts[k], 2) for k in agg if counts.get(k)}
+
+                # Track for section overall recomputation
+                if key != "Overall":
+                    if section not in section_sub_agg:
+                        section_sub_agg[section] = {}
+                        section_sub_counts[section] = {}
+                    section_sub_agg[section][key] = (
+                        section_sub_agg[section].get(key, 0) + val
+                    )
+                    section_sub_counts[section][key] = (
+                        section_sub_counts[section].get(key, 0) + 1
+                    )
+
+    means = {k: round(agg[k] / counts[k], 2) for k in agg if counts.get(k)}
+
+    # Recompute section Overalls from applicable subcriteria means when tags are used
+    if use_tags:
+        for section in target_sections:
+            if section == "Arabic_Accuracy":
+                continue  # Arabic Accuracy keeps raw Overall
+            sub_means = []
+            for key, total in section_sub_agg.get(section, {}).items():
+                cnt = section_sub_counts.get(section, {}).get(key, 0)
+                if cnt > 0:
+                    sub_means.append(total / cnt)
+            if sub_means:
+                means[(section, "Overall")] = round(
+                    sum(sub_means) / len(sub_means), 2
+                )
+
+    # Compute Final_Overall as average of all section Overalls
+    overall_values = [
+        means[(s, "Overall")]
+        for s in target_sections
+        if (s, "Overall") in means
+    ]
+    if overall_values:
+        means[("", "Final_Overall")] = round(
+            sum(overall_values) / len(overall_values), 2
+        )
+    return means
 
 
 def ensure_csv_structure(
@@ -399,6 +506,10 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         type=int,
         default=100,
         help="Number of questions to evaluate (default: 100). Set to 0 for all.",
+    )
+    p.add_argument(
+        "--question-tags",
+        help="Path to question tags JSON file for selective scoring (auto-discovered for English if omitted)",
     )
     return p.parse_args(argv)
 
@@ -602,6 +713,42 @@ def main(argv: List[str]) -> int:
         for q, a in raw_pairs:
             if q not in q_to_a:
                 q_to_a[q] = a
+        missing_questions = [q for q in eval_questions if q not in q_to_a]
+        if missing_questions:
+            print(
+                f"[retry] {len(missing_questions)} missing answers detected, retrying generation..."
+            )
+            retry_responses = engine.generate_responses(
+                missing_questions,
+                provider=args.provider,
+                model=args.gen_model,
+                system=_load_system_prompt(engine, args.use_system_prompt),
+            )
+            # Append retried answers to the JSONL and update q_to_a
+            retried = 0
+            with dataset_path.open("a", encoding="utf-8") as f:
+                for r in retry_responses:
+                    if "error" in r:
+                        print(f"[retry] Still failed: {r['question'][:60]}... -> {r['error']}")
+                        continue
+                    q_to_a[r["question"]] = r["answer"]
+                    retried += 1
+                    msgs = [
+                        {"role": "user", "content": r["question"]},
+                        {"role": "assistant", "content": r["answer"]},
+                    ]
+                    obj = {
+                        "messages": msgs,
+                        "gen_model": args.gen_model,
+                        "provider": r.get("provider"),
+                        "timestamp": dt.now().isoformat(),
+                        "use_system_prompt": args.use_system_prompt,
+                    }
+                    if args.system_prompt_label:
+                        obj["system_prompt_label"] = args.system_prompt_label
+                    f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+            print(f"[retry] Recovered {retried}/{len(missing_questions)} missing answers")
+
         missing = 0
         pairs: List[Tuple[str, str]] = []
         for q in eval_questions:
@@ -614,7 +761,7 @@ def main(argv: List[str]) -> int:
                 )  # Placeholder blank answer -> evaluation engine will penalize
         if missing:
             print(
-                f"[generate-eval] WARNING: {missing} missing answers inserted as empty strings (will be penalized)."
+                f"[generate-eval] WARNING: {missing} missing answers still present (will be penalized)."
             )
         print(
             f"[generate-eval] Prepared {len(pairs)} question/answer pairs for evaluation."
@@ -638,49 +785,26 @@ def main(argv: List[str]) -> int:
         for q, a in raw_pairs:
             if q in eval_set and q not in q_to_a:
                 q_to_a[q] = a
-        missing = [q for q in eval_questions if q not in q_to_a]
-        if missing:
-            raise SystemExit(
-                f"Dataset missing {len(missing)} required questions. First missing: {missing[:3]}"
+        
+        missing_count = 0
+        pairs: List[Tuple[str, str]] = []
+        for q in eval_questions:
+            if q in q_to_a:
+                pairs.append((q, q_to_a[q]))
+            else:
+                missing_count += 1
+                pairs.append((q, ""))  # Empty answer triggers penalty
+        
+        if missing_count:
+            print(
+                f"[dataset] WARNING: {missing_count} missing answers inserted as empty strings (will be penalized)."
+            )
+        else:
+            print(
+                f"[load] Filtered {len(pairs)} evaluation pairs from dataset (strict 100-question set)."
             )
 
-        pairs = [(q, q_to_a[q]) for q in eval_questions]
-        print(
-            f"[load] Filtered {len(pairs)} evaluation pairs from dataset (strict 100-question set)."
-        )
-
-    # Evaluate
-    print("[eval] Running evaluation...")
-    results = engine.batch_evaluate(pairs, limit=None, progress=not args.no_progress)
-    print("[eval] Done.")
-
-    # Aggregate
-    include_arabic_accuracy = args.language == "arabic"
-    aggregated = aggregate_scores(results, include_arabic_accuracy)
-    print("[summary] Aggregated means:")
-    for k in sorted(aggregated):
-        print(f"  {k}: {aggregated[k]}")
-
-    # Update comparison CSV
-    # Build rows order dynamically for this run (legacy rows preserved via ensure_csv_structure)
-    rows_order = build_rows_order(include_arabic_accuracy)
-    csv_meta_values: Dict[tuple[str, str], str] = {
-        ("Meta", "Judge_Model"): args.judge_model,
-        ("Meta", "Gen_Model"): args.gen_model if generation_mode else "N/A",
-        ("Meta", "Provider"): args.provider if generation_mode else "N/A",
-    }
-    if system_prompt_label:
-        csv_meta_values[("Meta", "System_Prompt_Label")] = system_prompt_label
-    update_comparison_csv(
-        comparison_csv_path,
-        answers_label,
-        aggregated,
-        overwrite=args.overwrite,
-        rows_order=rows_order,
-        meta_values=csv_meta_values,
-    )
-
-    # Results JSONL placement (mode dependent)
+    # Results JSONL placement (mode dependent) -- resolve path BEFORE evaluation
     if args.mode in ("dataset", "extended"):
         default_results_dir = training_evals_dir
     elif args.mode == "generate-ft_evals":
@@ -699,6 +823,99 @@ def main(argv: List[str]) -> int:
         filename = f"eval_results_{sanitize_filename(answers_label)}__judged_by_{sanitize_filename(args.judge_model)}.jsonl"
         results_jsonl = default_results_dir / filename
 
+    # Load existing eval results for incremental evaluation
+    existing_results: Dict[str, dict] = {}
+    if results_jsonl.exists():
+        with results_jsonl.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                q = obj.get("question", "")
+                ev = obj.get("evaluation")
+                answer = obj.get("answer", "")
+                # Keep result if it has a valid evaluation and the answer wasn't empty
+                if q and ev and answer:
+                    existing_results[q] = obj
+        print(f"[eval] Found {len(existing_results)} existing evaluations in {results_jsonl}")
+
+    # Determine which pairs still need evaluation
+    pairs_to_eval = []
+    for q, a in pairs:
+        if q not in existing_results:
+            pairs_to_eval.append((q, a))
+        elif not a:
+            # Answer was empty before but may have been retried -- re-evaluate
+            pairs_to_eval.append((q, a))
+
+    if pairs_to_eval:
+        print(f"[eval] Evaluating {len(pairs_to_eval)} new/missing pairs (skipping {len(pairs) - len(pairs_to_eval)} already evaluated)...")
+        new_results = engine.batch_evaluate(pairs_to_eval, limit=None, progress=not args.no_progress)
+        print("[eval] Done.")
+    else:
+        new_results = []
+        print("[eval] All pairs already evaluated, skipping evaluation.")
+
+    # Merge: existing results + new results, rebuild full list in pairs order
+    for item in new_results:
+        q = item.get("question", "")
+        if q:
+            existing_results[q] = item
+
+    results: List[dict] = []
+    for q, a in pairs:
+        if q in existing_results:
+            results.append(existing_results[q])
+        else:
+            # Should not happen, but fail gracefully
+            results.append({"question": q, "answer": a, "error": "no evaluation"})
+
+    # Load question tags for selective scoring (English only)
+    question_tags: Optional[Dict[str, dict]] = None
+    if args.question_tags:
+        tags_path = Path(args.question_tags)
+    else:
+        tags_path = base_lang_dir / f"{prefix}question_tags.json"
+    if tags_path.exists():
+        with tags_path.open("r", encoding="utf-8") as f:
+            tags_data = json.load(f)
+        question_tags = {}
+        for tag in tags_data.get("tags", []):
+            question_tags[tag["question"]] = tag
+        print(f"[tags] Loaded {len(question_tags)} question tags from {tags_path}")
+    elif args.question_tags:
+        print(f"[warning] Question tags file not found: {tags_path}")
+
+    # Aggregate
+    include_arabic_accuracy = args.language == "arabic"
+    aggregated = aggregate_scores(results, include_arabic_accuracy, question_tags=question_tags)
+    print("[summary] Aggregated means:")
+    for k in sorted(aggregated):
+        print(f"  {k}: {aggregated[k]}")
+
+    # Update comparison CSV
+    rows_order = build_rows_order(include_arabic_accuracy)
+    csv_meta_values: Dict[tuple[str, str], str] = {
+        ("Meta", "Judge_Model"): args.judge_model,
+        ("Meta", "Gen_Model"): args.gen_model if generation_mode else "N/A",
+        ("Meta", "Provider"): args.provider if generation_mode else "N/A",
+    }
+    if system_prompt_label:
+        csv_meta_values[("Meta", "System_Prompt_Label")] = system_prompt_label
+    update_comparison_csv(
+        comparison_csv_path,
+        answers_label,
+        aggregated,
+        overwrite=args.overwrite,
+        rows_order=rows_order,
+        meta_values=csv_meta_values,
+    )
+
+    # Write full results JSONL (overwrite with clean merged set)
     meta = {
         "dataset": str(dataset_path),
         "answers_label": answers_label,
@@ -714,7 +931,10 @@ def main(argv: List[str]) -> int:
         "comparison_csv": str(comparison_csv_path),
         "timestamp": dt.now().isoformat(),
     }
-    append_results_jsonl(results_jsonl, results, meta)
+    if new_results:
+        append_results_jsonl(results_jsonl, new_results, meta)
+    else:
+        print(f"[results] No new results to append to {results_jsonl}")
     print("[done] Completed.")
     return 0
 

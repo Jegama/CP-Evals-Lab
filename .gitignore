@@ -1,5 +1,4 @@
 .ipynb_checkpoints
-*.ipynb
 .mypy_cache
 .vscode
 __pycache__
@@ -14,6 +13,7 @@ venv/
 *.log
 temp_*.jsonl
 notes.md
+C3 Sermon Evals.md
 *split.jsonl
 huggingface/
 *.mp3

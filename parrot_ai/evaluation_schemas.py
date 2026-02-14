@@ -1,8 +1,86 @@
 """Pydantic schema models for evaluation results."""
 
 from __future__ import annotations
+from enum import Enum
 from typing import Optional, List
 from pydantic import BaseModel, Field
+
+
+# ---------------- Question Tagging Schemas (English selective scoring) ---------------- #
+
+
+class DoctrineTier(str, Enum):
+    CORE = "core"
+    SECONDARY = "secondary"
+    TERTIARY = "tertiary"
+    NOT_DIRECTLY_DOCTRINAL = "not_directly_doctrinal"
+
+
+class QuestionType(str, Enum):
+    FACTUAL_HISTORICAL = "factual_historical"
+    DOCTRINAL = "doctrinal"
+    APOLOGETIC_INTERFAITH = "apologetic_interfaith"
+    PASTORAL = "pastoral"
+    PRACTICAL_ETHICAL = "practical_ethical"
+    COMPARATIVE_RELIGION = "comparative_religion"
+    METHODOLOGICAL = "methodological"
+    BIBLE_SURVEY = "bible_survey"
+
+
+class QuestionTag(BaseModel):
+    question: str
+    doctrine_tier: DoctrineTier
+    question_type: QuestionType
+    applies_core_doctrine: bool
+    applies_secondary_doctrine: bool
+    applies_tertiary_handling: bool
+    applies_pastoral: bool
+    applies_interfaith: bool
+    applies_evangelism: bool
+    reason: str
+
+
+class QuestionTagSet(BaseModel):
+    tags: List[QuestionTag]
+    classification_model: str
+    classification_timestamp: str
+    version: str = "1.0"
+
+
+# Flag-to-subcriteria mapping: each flag controls which (section, subcriteria)
+# pairs are applicable. Subcriteria NOT listed here are always scored.
+SUBCRITERIA_FLAG_MAP: dict[str, list[tuple[str, str]]] = {
+    "applies_core_doctrine": [
+        ("Adherence", "Core"),
+        ("Kindness_and_Gentleness", "Core_Clarity_with_Kindness"),
+    ],
+    "applies_secondary_doctrine": [
+        ("Adherence", "Secondary"),
+        ("Kindness_and_Gentleness", "Secondary_Fairness"),
+    ],
+    "applies_tertiary_handling": [
+        ("Adherence", "Tertiary_Handling"),
+        ("Kindness_and_Gentleness", "Tertiary_Neutrality"),
+    ],
+    "applies_pastoral": [
+        ("Kindness_and_Gentleness", "Pastoral_Sensitivity"),
+    ],
+    "applies_interfaith": [
+        ("Interfaith_Sensitivity", "Respect_and_Handling_Objections"),
+        ("Interfaith_Sensitivity", "Objection_Acknowledgement"),
+    ],
+    "applies_evangelism": [
+        ("Interfaith_Sensitivity", "Evangelism"),
+        ("Interfaith_Sensitivity", "Gospel_Boldness"),
+    ],
+}
+
+# Subcriteria that are always scored regardless of flags
+ALWAYS_ON_SUBCRITERIA: set[tuple[str, str]] = {
+    ("Adherence", "Biblical_Basis"),
+    ("Adherence", "Consistency"),
+    ("Kindness_and_Gentleness", "Tone"),
+}
 
 
 class AdherenceModel(BaseModel):
@@ -224,6 +302,14 @@ class SermonScoringStep2Raw(BaseModel):
 
 
 __all__ = [
+    # Question tagging
+    "DoctrineTier",
+    "QuestionType",
+    "QuestionTag",
+    "QuestionTagSet",
+    "SUBCRITERIA_FLAG_MAP",
+    "ALWAYS_ON_SUBCRITERIA",
+    # Evaluation result models
     "AdherenceModel",
     "KindnessGentlenessModel",
     "InterfaithSensitivityModel",
