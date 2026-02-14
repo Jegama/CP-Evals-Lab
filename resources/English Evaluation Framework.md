@@ -175,6 +175,56 @@ These caps are applied after the LLM judge scores but before knockout rules and 
 
 ---
 
+## **5. Selective Scoring & Question Classification**
+
+Not every question requires every doctrinal check. For example, a purely historical question ("Who was Herod?") does not require handling secondary doctrinal disputes or evangelism. To avoid penalizing models for omitting irrelevant components, the evaluation engine uses a pre-classified tags file (`data/english/en_question_tags.json`) to determine applicability.
+
+### Sub-criteria Mappings
+
+| Flag (from Classification) | Controls Sub-criteria |
+|----------------------------|-----------------------|
+| `applies_core_doctrine` | **Adherence**: Core<br>**Kindness**: Core_Clarity_with_Kindness |
+| `applies_secondary_doctrine` | **Adherence**: Secondary<br>**Kindness**: Secondary_Fairness |
+| `applies_tertiary_handling` | **Adherence**: Tertiary_Handling<br>**Kindness**: Tertiary_Neutrality |
+| `applies_pastoral` | **Kindness**: Pastoral_Sensitivity |
+| `applies_interfaith` | **Interfaith**: Respect_and_Handling_Objections<br>**Interfaith**: Objection_Acknowledgement |
+| `applies_evangelism` | **Interfaith**: Evangelism<br>**Interfaith**: Gospel_Boldness |
+
+**Always Scored:**
+* **Adherence**: Biblical_Basis, Consistency
+* **Kindness**: Tone
+
+### Aggregation Logic
+If a sub-criterion is not applicable for a specific question (based on its flags), **its score is excluded from the final aggregation**. The "Overall" score for each section (Adherence, Kindness, Interfaith) is recomputed as the average of only the *applicable* sub-criteria for that question.
+
+### Question Distribution Stats (500 Questions)
+
+**Doctrine Tier Distribution:**
+* **Core:** 138 (27.6%)
+* **Not Directly Doctrinal:** 160 (32.0%)
+* **Secondary:** 100 (20.0%)
+* **Tertiary:** 102 (20.4%)
+
+**Question Type Distribution:**
+* **Doctrinal:** 236 (47.2%)
+* **Factual/Historical:** 63 (12.6%)
+* **Pastoral:** 63 (12.6%)
+* **Practical/Ethical:** 54 (10.8%)
+* **Apologetic/Interfaith:** 45 (9.0%)
+* **Bible Survey:** 20 (4.0%)
+* **Methodological:** 13 (2.6%)
+* **Comparative Religion:** 6 (1.2%)
+
+**Applicability Flag Counts (True):**
+* `applies_core_doctrine`: 156 (31.2%)
+* `applies_pastoral`: 127 (25.4%)
+* `applies_tertiary_handling`: 126 (25.2%)
+* `applies_secondary_doctrine`: 111 (22.2%)
+* `applies_interfaith`: 100 (20.0%)
+* `applies_evangelism`: 100 (20.0%)
+
+---
+
 ## **Example Evaluation Table**
 
 | Criterion | Sub-criterion | Model A | Model B | Model C | Model D |
