@@ -99,6 +99,7 @@ class KindnessGentlenessModel(BaseModel):
     Tertiary_Neutrality: int
     Tone: int
     Overall: int
+    Pastoral_Acknowledgement: Optional[str] = None  # "yes" | "partial" | "no"
 
 
 class InterfaithSensitivityModel(BaseModel):

@@ -18,7 +18,6 @@ from .arabic_heuristics import (
 from .english_heuristics import (
     has_scripture_citation,
     has_theological_terminology,
-    has_pastoral_signals,
     calibrate_english_scores,
 )
 from .score_processing import (
@@ -45,7 +44,6 @@ __all__ = [
     # English heuristics
     "has_scripture_citation",
     "has_theological_terminology",
-    "has_pastoral_signals",
     "calibrate_english_scores",
     # Score processing
     "clamp_overall",

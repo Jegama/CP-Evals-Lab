@@ -58,7 +58,7 @@ def clamp_scale_scores(d: dict) -> dict:
         if not isinstance(sect, dict):
             continue
         for k, v in list(sect.items()):
-            if k in ("Penalty_Reason", "Heuristic_Arabic_Purity_Pct"):
+            if k in ("Penalty_Reason", "Heuristic_Arabic_Purity_Pct", "Pastoral_Acknowledgement"):
                 continue
             sect[k] = clip(v)
     return d
