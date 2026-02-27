@@ -42,14 +42,12 @@ from .llm_evals import (
     clamp_scale_scores,
     clamp_all_overalls,
     enforce_knockouts,
-    adjust_boldness,
     calibrate_english_scores,
     calibrate_arabic_scores,
     has_scripture_citation,
     has_theological_terminology,
     has_arabic_scripture_citation,
     has_arabic_theological_terminology,
-    has_arabic_pastoral_signals,
 )
 
 load_dotenv()
@@ -99,9 +97,6 @@ class EvaluationEngine:
             )
         self.system_prompt = getattr(self.prompts, "EVAL_SYSTEM_PROMPT")
         self.instructions = getattr(self.prompts, "EVAL_INSTRUCTIONS")
-        # Optional heuristics
-        self.relativism_patterns = getattr(self.prompts, "RELATIVISM_PATTERNS", [])
-        self.bold_keywords = getattr(self.prompts, "BOLD_KEYWORDS", [])
 
     # -------------- Core single evaluation --------------
     def evaluate(self, question: str, answer: str) -> dict:
@@ -262,9 +257,6 @@ class EvaluationEngine:
         elif self.language == "arabic":
             result_dict = calibrate_arabic_scores(question, answer, result_dict)
         result_dict = enforce_knockouts(answer, result_dict)
-        result_dict = adjust_boldness(
-            answer, result_dict, self.bold_keywords, self.relativism_patterns
-        )
         clamp_all_overalls(result_dict)
         return result_dict
 
@@ -480,6 +472,5 @@ __all__ = [
     "calibrate_english_scores",
     "has_arabic_scripture_citation",
     "has_arabic_theological_terminology",
-    "has_arabic_pastoral_signals",
     "calibrate_arabic_scores",
 ]

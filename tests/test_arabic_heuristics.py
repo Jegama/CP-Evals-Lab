@@ -3,7 +3,6 @@
 Tests cover:
 - has_arabic_scripture_citation()
 - has_arabic_theological_terminology()
-- has_arabic_pastoral_signals()
 - calibrate_arabic_scores()
 """
 
@@ -11,7 +10,6 @@ import pytest
 from parrot_ai.llm_evaluation import (
     has_arabic_scripture_citation,
     has_arabic_theological_terminology,
-    has_arabic_pastoral_signals,
     calibrate_arabic_scores,
 )
 
@@ -93,37 +91,6 @@ class TestHasArabicTheologicalTerminology:
         assert not has_arabic_theological_terminology("")
 
 
-# ---------- has_arabic_pastoral_signals ----------
-
-class TestHasArabicPastoralSignals:
-    def test_two_signals(self):
-        text = "أفهم قلقك. الخبر السار أن المسيح يقدم الرجاء"
-        assert has_arabic_pastoral_signals(text)
-
-    def test_single_signal_not_enough(self):
-        text = "أفهم سؤالك. إليك الإجابة اللاهوتية"
-        assert not has_arabic_pastoral_signals(text)
-
-    def test_three_signals(self):
-        text = "سؤال رائع. أشجعك على الثقة. هناك رجاء في المسيح"
-        assert has_arabic_pastoral_signals(text)
-
-    def test_no_signals(self):
-        text = "عقيدة الاختيار موجودة في أفسس الأولى. الله اختارنا قبل تأسيس العالم"
-        assert not has_arabic_pastoral_signals(text)
-
-    def test_empty_string(self):
-        assert not has_arabic_pastoral_signals("")
-
-    def test_god_loves_and_hope(self):
-        text = "الله يحبك كثيراً. لا تفقد الأمل فالرب قريب"
-        assert has_arabic_pastoral_signals(text)
-
-    def test_prayer_and_grace(self):
-        text = "أصلي من أجلك. نعمة الله كافية لك"
-        assert has_arabic_pastoral_signals(text)
-
-
 # ---------- calibrate_arabic_scores ----------
 
 def _base_arabic_result() -> dict:
@@ -195,18 +162,6 @@ class TestCalibrateArabicScores:
         result = calibrate_arabic_scores("ما هي الكفارة؟", answer, result)
         assert result["Adherence"]["Core"] == 5
 
-    def test_pastoral_capped_when_no_signals(self):
-        result = _base_arabic_result()
-        answer = "الاختيار يعني أن الله اختار شعبه قبل تأسيس العالم"
-        result = calibrate_arabic_scores("ما هو الاختيار؟", answer, result)
-        assert result["Kindness_and_Gentleness"]["Pastoral_Sensitivity"] == 3
-
-    def test_pastoral_not_capped_with_signals(self):
-        result = _base_arabic_result()
-        answer = "أفهم قلقك. الخبر السار أن نعمة الله تغطينا"
-        result = calibrate_arabic_scores("هل أنا مخلّص؟", answer, result)
-        assert result["Kindness_and_Gentleness"]["Pastoral_Sensitivity"] == 5
-
     def test_theological_nuance_capped_when_no_terms(self):
         result = _base_arabic_result()
         answer = "يسوع هو الله وهو إنسان أيضاً. هذا ما يعلّمه الكتاب المقدس"
@@ -225,7 +180,6 @@ class TestCalibrateArabicScores:
         result = calibrate_arabic_scores("ماذا يجب أن أؤمن؟", answer, result)
         assert result["Adherence"]["Biblical_Basis"] == 3
         assert result["Adherence"]["Core"] == 4
-        assert result["Kindness_and_Gentleness"]["Pastoral_Sensitivity"] == 3
         assert result["Arabic_Accuracy"]["Theological_Nuance"] == 3
 
     def test_excellent_answer_no_caps(self):

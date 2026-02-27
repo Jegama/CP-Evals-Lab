@@ -74,8 +74,8 @@ Modes: `dataset`, `extended`, `generate-ft_evals`, `generate-api_evals`
 The main orchestrator lives in `llm_evaluation.py`. Helper functions are organized in the `llm_evals/` sub-package:
 - `data_loading.py` - `load_qa_pairs()`, `load_eval_questions()`
 - `arabic_heuristics.py` - Arabic purity penalty, Arabic ceiling-compression calibration
-- `english_heuristics.py` - English ceiling-compression calibration (Scripture citation, theological terminology, pastoral signals detection)
-- `score_processing.py` - Generic score clamping, knockouts, boldness adjustments
+- `english_heuristics.py` - English ceiling-compression calibration (Scripture citation, theological terminology, Pastoral_Acknowledgement-based cap)
+- `score_processing.py` - Generic score clamping, knockouts, weighted production score
 
 All symbols are re-exported via `llm_evals/__init__.py` for backward compatibility.
 
@@ -86,8 +86,7 @@ Heuristic pipeline order (do not reorder):
 4. Clamp overall scores
 5. Apply ceiling-compression calibration (English or Arabic)
 6. Knockout checks
-7. Boldness adjustments
-8. Final clamp
+7. Final clamp
 
 ### Sermon Evaluation (`parrot_ai/sermon_evaluation.py`)
 Two-step process:

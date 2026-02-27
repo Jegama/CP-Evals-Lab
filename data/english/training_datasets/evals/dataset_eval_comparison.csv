@@ -17,5 +17,6 @@ Interfaith_Sensitivity,Evangelism,5.0,4.19,4.67,4.79
 Interfaith_Sensitivity,Gospel_Boldness,5.0,4.9,4.99,4.96
 Interfaith_Sensitivity,Overall,4.65,4.27,4.51,4.42
 ,Final_Overall,4.64,4.44,4.56,4.57
+,Weighted_Production_Score,4.67,4.46,4.58,4.58
 Meta,System_Prompt_Label,v1_0,v1_0,v1_0,v1_0
 Meta,Judge_Model,gemini-3-flash-preview,gemini-3-flash-preview,gemini-3-flash-preview,gemini-3-flash-preview

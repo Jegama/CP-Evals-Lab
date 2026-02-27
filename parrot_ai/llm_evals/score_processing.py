@@ -1,4 +1,4 @@
-"""Generic score post-processing: clamping, knockouts, and boldness adjustments."""
+"""Generic score post-processing: clamping, knockouts, and weighted scoring."""
 
 
 def clamp_overall(section: dict, keys: list[str]) -> None:
@@ -156,37 +156,28 @@ def enforce_knockouts(answer: str, result_dict: dict) -> dict:
     return result_dict
 
 
-def adjust_boldness(
-    answer: str,
-    result_dict: dict,
-    bold_keywords: list[str],
-    relativism_patterns: list[str],
-) -> dict:
-    """Boldness / anti-relativism heuristic adjustments."""
-    interfaith = result_dict.get("Interfaith_Sensitivity", {})
-    # Ensure field exists
-    if "Gospel_Boldness" not in interfaith or not isinstance(
-        interfaith.get("Gospel_Boldness"), int
-    ):
-        interfaith["Gospel_Boldness"] = 3
-    lower_ans = answer.lower()
-    has_relativism = any(pat.lower() in lower_ans for pat in relativism_patterns)
-    has_bold = any(kw.lower() in lower_ans for kw in bold_keywords)
-    # Penalize relativism if no bold Christ-centered content
-    if has_relativism and not has_bold:
-        interfaith["Gospel_Boldness"] = min(interfaith.get("Gospel_Boldness", 3), 2)
-        # Also cap Evangelism
-        if interfaith.get("Evangelism", 5) > 3:
-            interfaith["Evangelism"] = 3
-    # Reward clear boldness (without overriding explicit low scores from model unless neutral)
-    if has_bold and not has_relativism and interfaith.get("Gospel_Boldness", 0) < 4:
-        interfaith["Gospel_Boldness"] = 4
-    # If both strong bold keywords and explicit invitation words, consider 5
-    if (
-        has_bold
-        and ("توب" in answer or "تعال" in answer or "آمن" in answer)
-        and not has_relativism
-    ):
-        interfaith["Gospel_Boldness"] = max(interfaith["Gospel_Boldness"], 5)
-    result_dict["Interfaith_Sensitivity"] = interfaith
-    return result_dict
+# Weights: Gospel + Doctrine Balanced
+# Adherence 40%, Interfaith_Sensitivity 35%, Kindness_and_Gentleness 25%
+_ENGLISH_SECTION_WEIGHTS = {
+    "Adherence": 0.40,
+    "Interfaith_Sensitivity": 0.35,
+    "Kindness_and_Gentleness": 0.25,
+}
+
+
+def compute_weighted_final_score(means: dict) -> float:
+    """Compute weighted production score from aggregated section means.
+
+    Expects means keyed as (section_name, "Overall").
+    Falls back to equal-weight normalization if a section is missing.
+    """
+    total_weight = 0.0
+    weighted_sum = 0.0
+    for section, weight in _ENGLISH_SECTION_WEIGHTS.items():
+        val = means.get((section, "Overall"))
+        if isinstance(val, (int, float)):
+            weighted_sum += val * weight
+            total_weight += weight
+    if total_weight == 0:
+        return 0.0
+    return round(weighted_sum / total_weight, 2)

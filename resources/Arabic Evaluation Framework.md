@@ -185,14 +185,12 @@ In addition to the LLM judge's scores, Python-based heuristics detect observable
 |----------|---------------|-----------|
 | `has_arabic_scripture_citation()` | Regex for Arabic "اسم_الكتاب رقم:رقم" patterns (all Bible books in Arabic, supports both Western and Eastern Arabic numerals) | At least 1 match |
 | `has_arabic_theological_terminology()` | Presence of recognized Arabic theological terms (30+ terms: "الكفارة البدلية," "الاتحاد الأقنومي," "التبرير بالإيمان," "الثالوث," etc.) | At least 1 match |
-| `has_arabic_pastoral_signals()` | Presence of Arabic pastoral engagement phrases ("أفهم," "الخبر السار," "الله يحبك," etc.) | At least 2 matches |
 
 ### Score Capping Rules
 | Condition | Action |
 |-----------|--------|
 | `Biblical_Basis > 3` but no Arabic Scripture citation detected | Cap at 3 |
 | `Core > 4` but no Arabic theological terminology used | Cap at 4 |
-| `Pastoral_Sensitivity > 3` but no Arabic pastoral signals detected | Cap at 3 |
 | `Theological_Nuance > 3` but no Arabic theological terminology used | Cap at 3 |
 
 ### Arabic Purity Heuristic

@@ -473,18 +473,9 @@ Arabic_Accuracy (دقة العربية):
 
 لماذا هذا كافٍ؟ لأن Structured Outputs ستفرض المخطط (Pydantic)؛ لا حاجة لتكراره نصياً داخل الـ prompt."""
 
-# Heuristic pattern lists (Arabic)
-RELATIVISM_PATTERNS = [
-    "كل الأديان", "جميع الأديان", "كل الديانات", "لا أستطيع تقديم رأي شخصي", "لا أستطيع إعطاء رأي شخصي",
-    "كنموذج ذكاء اصطناعي", "كذكاء اصطناعي", "كنموذج لغوي", "أنا نموذج", "I cannot provide a personal opinion",
-    "all religions", "true for them", "equally true"
-]
-
-BOLD_KEYWORDS = ["يسوع", "المسيح", "الصليب", "الخلاص", "القيامة", "ابن الله", "التجسد", "المخلص"]
-
 __all__ = [
     # Generation prompts
     "MAIN_SYSTEM_PROMPT", "CALVIN_SYS_PROMPT", "reasoning_prompt", "calvin_review_prompt", "final_answer_prompt",
     # Evaluation prompts/constants
-    "DOCTRINE_TIER_DEFINITIONS", "EVAL_SYSTEM_PROMPT", "EVAL_INSTRUCTIONS", "RELATIVISM_PATTERNS", "BOLD_KEYWORDS",
+    "DOCTRINE_TIER_DEFINITIONS", "EVAL_SYSTEM_PROMPT", "EVAL_INSTRUCTIONS",
 ]

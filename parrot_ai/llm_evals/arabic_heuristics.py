@@ -136,31 +136,6 @@ _ARABIC_THEOLOGICAL_TERMS = [
     "عصمة الكتاب المقدس",  # inerrancy of Scripture
 ]
 
-_ARABIC_PASTORAL_SIGNALS = [
-    "أفهم",  # I understand
-    "سؤال رائع",  # great question
-    "سؤال مهم",  # important question
-    "هذا سؤال صعب",  # this is a difficult question
-    "الخبر السار",  # the good news
-    "البشرى السارة",  # the good news (alt)
-    "الله يحبك",  # God loves you
-    "الله يهتم",  # God cares
-    "لست وحدك",  # you are not alone
-    "أشجعك",  # I encourage you
-    "تشجع",  # be encouraged
-    "لا تفقد الأمل",  # don't lose hope
-    "هناك رجاء",  # there is hope
-    "نعمة الله",  # God's grace
-    "رحمة الله",  # God's mercy
-    "محبة الله",  # God's love
-    "الرب قريب",  # the Lord is near
-    "الله معك",  # God is with you
-    "أصلي من أجلك",  # I pray for you
-    "سلام ونعمة",  # peace and grace
-    "شكراً لسؤالك",  # thank you for asking
-]
-
-
 def has_arabic_scripture_citation(answer: str) -> bool:
     """Return True if the answer contains at least one Arabic Scripture citation."""
     return bool(_ARABIC_SCRIPTURE_RE.search(answer))
@@ -169,12 +144,6 @@ def has_arabic_scripture_citation(answer: str) -> bool:
 def has_arabic_theological_terminology(answer: str) -> bool:
     """Return True if the answer uses at least one recognized Arabic theological term."""
     return any(term in answer for term in _ARABIC_THEOLOGICAL_TERMS)
-
-
-def has_arabic_pastoral_signals(answer: str) -> bool:
-    """Return True if the answer contains 2+ Arabic pastoral engagement signals."""
-    count = sum(1 for signal in _ARABIC_PASTORAL_SIGNALS if signal in answer)
-    return count >= 2
 
 
 def calibrate_arabic_scores(question: str, answer: str, result_dict: dict) -> dict:
@@ -201,14 +170,6 @@ def calibrate_arabic_scores(question: str, answer: str, result_dict: dict) -> di
         and not has_arabic_theological_terminology(answer)
     ):
         adherence["Core"] = 4
-
-    # Pastoral_Sensitivity > 3 but no Arabic pastoral signals -> cap at 3
-    if (
-        isinstance(kindness.get("Pastoral_Sensitivity"), int)
-        and kindness["Pastoral_Sensitivity"] > 3
-        and not has_arabic_pastoral_signals(answer)
-    ):
-        kindness["Pastoral_Sensitivity"] = 3
 
     # Theological_Nuance > 3 but no theological terminology -> cap at 3
     if (

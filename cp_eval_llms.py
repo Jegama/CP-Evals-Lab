@@ -49,6 +49,7 @@ from parrot_ai.llm_evaluation import (
     load_qa_pairs,
     load_eval_questions,
 )
+from parrot_ai.llm_evals import compute_weighted_final_score
 from parrot_ai.evaluation_schemas import (
     SUBCRITERIA_FLAG_MAP,
     ALWAYS_ON_SUBCRITERIA,
@@ -96,6 +97,7 @@ ARABIC_ACCURACY_SUBCRITERIA = [
 ]
 
 FINAL_OVERALL_ROW = ("", "Final_Overall")
+WEIGHTED_SCORE_ROW = ("", "Weighted_Production_Score")
 
 META_ROWS = [
     ("Meta", "System_Prompt_Label"),
@@ -112,6 +114,8 @@ def build_rows_order(include_arabic: bool) -> list[tuple[str, str]]:
         for sub in ARABIC_ACCURACY_SUBCRITERIA:
             rows.append(("Arabic_Accuracy", sub))
     rows.append(FINAL_OVERALL_ROW)
+    if not include_arabic:
+        rows.append(WEIGHTED_SCORE_ROW)
     for section, sub in META_ROWS:
         rows.append((section, sub))
     return rows
@@ -310,7 +314,7 @@ def aggregate_scores(
                     sum(sub_means) / len(sub_means), 2
                 )
 
-    # Compute Final_Overall as average of all section Overalls
+    # Compute Final_Overall as flat average of all section Overalls
     overall_values = [
         means[(s, "Overall")]
         for s in target_sections
@@ -320,6 +324,12 @@ def aggregate_scores(
         means[("", "Final_Overall")] = round(
             sum(overall_values) / len(overall_values), 2
         )
+
+    # Compute Weighted_Production_Score for English runs only
+    # (Adherence 40%, Interfaith_Sensitivity 35%, Kindness_and_Gentleness 25%)
+    if not include_arabic_accuracy:
+        means[("", "Weighted_Production_Score")] = compute_weighted_final_score(means)
+
     return means
 
 
@@ -615,10 +625,10 @@ def main(argv: List[str]) -> int:
         # Output dataset naming & placement
         if args.mode == "generate-ft_evals":
             output_dir = ft_evals_dir
-            auto_name = f"generated_ft_{args.provider}_{sanitize_filename(args.answers_label)}.jsonl"
+            auto_name = f"generated_ft_{args.provider}_{sanitize_filename(answers_label)}.jsonl"
         else:  # generate-api_evals
             output_dir = api_evals_dir
-            auto_name = f"generated_api_{args.provider}_{sanitize_filename(args.answers_label)}.jsonl"
+            auto_name = f"generated_api_{args.provider}_{sanitize_filename(answers_label)}.jsonl"
 
         output_dataset_name = args.output_dataset or auto_name
         output_dataset_path = Path(output_dataset_name)
@@ -847,9 +857,6 @@ def main(argv: List[str]) -> int:
     pairs_to_eval = []
     for q, a in pairs:
         if q not in existing_results:
-            pairs_to_eval.append((q, a))
-        elif not a:
-            # Answer was empty before but may have been retried -- re-evaluate
             pairs_to_eval.append((q, a))
 
     if pairs_to_eval:
