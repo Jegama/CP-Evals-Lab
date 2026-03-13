@@ -60,8 +60,8 @@ data/
 parrot_ai/                          			# Core chain + evaluation engine components
 	llm_evals/                      			# Evaluation sub-package (heuristics, score processing, data loading)
 		arabic_heuristics.py        			# Arabic purity penalty + ceiling-compression calibration
-		english_heuristics.py       			# English ceiling-compression calibration (Scripture, theology, pastoral detection)
-		score_processing.py         			# Generic score clamping, knockouts, boldness adjustments
+		english_heuristics.py       			# English ceiling-compression calibration (Scripture, theology, Pastoral_Acknowledgement cap)
+		score_processing.py         			# Generic score clamping, knockouts, weighted scoring
 		data_loading.py             			# QA pair and evaluation question loaders
 cp_create_dataset.py            				# Build / enrich training dataset
 cp_eval_llms.py                      			# Unified generation + evaluation CLI (language + mode aware)

@@ -162,20 +162,38 @@ In addition to the LLM judge's scores, Python-based heuristics detect observable
 |----------|---------------|-----------|
 | `has_scripture_citation()` | Regex for "Book Chapter:Verse" patterns (all 66 Bible books) | At least 1 match |
 | `has_theological_terminology()` | Presence of recognized theological terms (40+ terms: "substitutionary atonement," "hypostatic union," "sola fide," "trinity," etc.) | At least 1 match |
-| `has_pastoral_signals()` | Presence of pastoral engagement phrases ("I understand," "the good news is," "God loves you," etc.) | At least 2 matches |
+
+`Pastoral_Sensitivity` uses a judge-provided semantic signal rather than phrase-matching. During scoring, the judge sets `Pastoral_Acknowledgement` to `"yes"` (response opens by naming the emotional or spiritual weight of the question before teaching), `"partial"` (acknowledgment present but brief or generic), or `"no"` (response jumps straight to doctrine without acknowledgment).
 
 ### Score Capping Rules
 | Condition | Action |
 |-----------|--------|
 | `Biblical_Basis > 3` but no Scripture citation detected | Cap at 3 |
 | `Core > 4` but no theological terminology used | Cap at 4 |
-| `Pastoral_Sensitivity > 3` but no pastoral signals detected | Cap at 3 |
+| `Pastoral_Acknowledgement == "no"` and `Pastoral_Sensitivity > 3` | Cap at 3 |
+| `Pastoral_Acknowledgement == "partial"` and `Pastoral_Sensitivity > 4` | Cap at 4 |
 
-These caps are applied after the LLM judge scores but before knockout rules and boldness adjustments.
+These caps are applied after the LLM judge scores but before knockout rules.
 
 ---
 
-## **5. Selective Scoring & Question Classification**
+## **5. Weighted Production Score**
+
+In addition to `Final_Overall` (flat average of all three section Overalls), a `Weighted_Production_Score` is computed using the ministry's priority weighting:
+
+| Section | Weight |
+|---------|--------|
+| Adherence | 40% |
+| Interfaith_Sensitivity | 35% |
+| Kindness_and_Gentleness | 25% |
+
+`Weighted_Production_Score = (Adherence.Overall × 0.40) + (Interfaith_Sensitivity.Overall × 0.35) + (Kindness_and_Gentleness.Overall × 0.25)`
+
+This weighting reflects the ministry's priority order: doctrinal faithfulness first, evangelistic clarity second, pastoral warmth third. Both `Final_Overall` and `Weighted_Production_Score` appear as consecutive rows in the comparison CSV.
+
+---
+
+## **6. Selective Scoring & Question Classification**
 
 Not every question requires every doctrinal check. For example, a purely historical question ("Who was Herod?") does not require handling secondary doctrinal disputes or evangelism. To avoid penalizing models for omitting irrelevant components, the evaluation engine uses a pre-classified tags file (`data/english/en_question_tags.json`) to determine applicability.
 
@@ -265,7 +283,8 @@ If a sub-criterion is not applicable for a specific question (based on its flags
       "Secondary_Fairness": 4,
       "Tertiary_Neutrality": 4,
       "Tone": 4,
-      "Overall": 4
+      "Overall": 4,
+      "Pastoral_Acknowledgement": "partial"
    },
    "Interfaith_Sensitivity": {
       "Respect_and_Handling_Objections": 5,

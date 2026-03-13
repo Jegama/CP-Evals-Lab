@@ -35,19 +35,6 @@ _THEOLOGICAL_TERMS = [
     "cessationism", "continuationism", "complementarian", "egalitarian",
 ]
 
-_PASTORAL_SIGNALS = [
-    "i understand", "that's a great question", "this is a difficult",
-    "this can be hard", "it's okay to", "you're not alone",
-    "i want to encourage", "take heart", "be encouraged",
-    "god loves you", "god cares", "he is with you", "he is near",
-    "praying for", "i'm sorry to hear", "i'm sorry you",
-    "that must be", "i can see why", "it makes sense that",
-    "the good news is", "there is hope", "don't lose hope",
-    "grace and peace", "may god", "god's grace", "god's mercy",
-    "what a wonderful question", "thank you for asking",
-    "i appreciate your", "that's an important question",
-]
-
 
 def has_scripture_citation(answer: str) -> bool:
     """Return True if the answer contains at least one Scripture citation."""
@@ -58,13 +45,6 @@ def has_theological_terminology(answer: str) -> bool:
     """Return True if the answer uses at least one recognized theological term."""
     lower = answer.lower()
     return any(term in lower for term in _THEOLOGICAL_TERMS)
-
-
-def has_pastoral_signals(answer: str) -> bool:
-    """Return True if the answer contains 2+ pastoral engagement signals."""
-    lower = answer.lower()
-    count = sum(1 for signal in _PASTORAL_SIGNALS if signal in lower)
-    return count >= 2
 
 
 def calibrate_english_scores(question: str, answer: str, result_dict: dict) -> dict:
@@ -92,13 +72,17 @@ def calibrate_english_scores(question: str, answer: str, result_dict: dict) -> d
     ):
         adherence["Core"] = 4
 
-    # Pastoral_Sensitivity > 3 but no pastoral signals -> cap at 3
-    if (
-        isinstance(kindness.get("Pastoral_Sensitivity"), int)
-        and kindness["Pastoral_Sensitivity"] > 3
-        and not has_pastoral_signals(answer)
-    ):
-        kindness["Pastoral_Sensitivity"] = 3
+    # Pastoral_Sensitivity cap based on judge-provided Pastoral_Acknowledgement:
+    #   "no"      -> cap at 3 (jumped straight to doctrine, no acknowledgment)
+    #   "partial" -> cap at 4 (acknowledgment present but brief or generic)
+    #   "yes"     -> no cap  (full acknowledgment; let judge score stand)
+    #   None      -> no cap  (legacy result without this field; no action taken)
+    pastoral_ack = kindness.get("Pastoral_Acknowledgement")
+    if isinstance(kindness.get("Pastoral_Sensitivity"), int):
+        if pastoral_ack == "no" and kindness["Pastoral_Sensitivity"] > 3:
+            kindness["Pastoral_Sensitivity"] = 3
+        elif pastoral_ack == "partial" and kindness["Pastoral_Sensitivity"] > 4:
+            kindness["Pastoral_Sensitivity"] = 4
 
     result_dict["Adherence"] = adherence
     result_dict["Kindness_and_Gentleness"] = kindness

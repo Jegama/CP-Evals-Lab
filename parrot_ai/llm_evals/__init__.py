@@ -12,13 +12,11 @@ from .arabic_heuristics import (
     apply_purity_penalty,
     has_arabic_scripture_citation,
     has_arabic_theological_terminology,
-    has_arabic_pastoral_signals,
     calibrate_arabic_scores,
 )
 from .english_heuristics import (
     has_scripture_citation,
     has_theological_terminology,
-    has_pastoral_signals,
     calibrate_english_scores,
 )
 from .score_processing import (
@@ -26,7 +24,7 @@ from .score_processing import (
     clamp_all_overalls,
     clamp_scale_scores,
     enforce_knockouts,
-    adjust_boldness,
+    compute_weighted_final_score,
 )
 
 __all__ = [
@@ -40,17 +38,15 @@ __all__ = [
     "apply_purity_penalty",
     "has_arabic_scripture_citation",
     "has_arabic_theological_terminology",
-    "has_arabic_pastoral_signals",
     "calibrate_arabic_scores",
     # English heuristics
     "has_scripture_citation",
     "has_theological_terminology",
-    "has_pastoral_signals",
     "calibrate_english_scores",
     # Score processing
     "clamp_overall",
     "clamp_all_overalls",
     "clamp_scale_scores",
     "enforce_knockouts",
-    "adjust_boldness",
+    "compute_weighted_final_score",
 ]

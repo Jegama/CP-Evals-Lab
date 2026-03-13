@@ -3,7 +3,6 @@
 Tests cover:
 - has_scripture_citation()
 - has_theological_terminology()
-- has_pastoral_signals()
 - calibrate_english_scores()
 """
 
@@ -11,7 +10,6 @@ import pytest
 from parrot_ai.llm_evaluation import (
     has_scripture_citation,
     has_theological_terminology,
-    has_pastoral_signals,
     calibrate_english_scores,
 )
 
@@ -95,37 +93,6 @@ class TestHasTheologicalTerminology:
         assert has_theological_terminology("We trust in the sovereignty of God over all things.")
 
 
-# ---------- has_pastoral_signals ----------
-
-class TestHasPastoralSignals:
-    def test_two_signals(self):
-        text = "I understand your concern. The good news is that Christ offers hope."
-        assert has_pastoral_signals(text)
-
-    def test_single_signal_not_enough(self):
-        text = "I understand your concern. Here is the doctrinal answer."
-        assert not has_pastoral_signals(text)
-
-    def test_three_signals(self):
-        text = "That's a great question. I want to encourage you. There is hope in Christ."
-        assert has_pastoral_signals(text)
-
-    def test_no_signals(self):
-        text = "The doctrine of election is found in Ephesians 1. God chose us before the foundation."
-        assert not has_pastoral_signals(text)
-
-    def test_empty_string(self):
-        assert not has_pastoral_signals("")
-
-    def test_case_insensitive(self):
-        text = "I Understand your pain. Take Heart, for God is faithful."
-        assert has_pastoral_signals(text)
-
-    def test_pastoral_with_god_cares(self):
-        text = "God cares about you deeply. Be encouraged, He is near."
-        assert has_pastoral_signals(text)
-
-
 # ---------- calibrate_english_scores ----------
 
 def _base_result() -> dict:
@@ -196,28 +163,46 @@ class TestCalibrateEnglishScores:
         result = calibrate_english_scores("What is salvation?", answer, result)
         assert result["Adherence"]["Core"] == 4
 
-    def test_pastoral_capped_when_no_signals(self):
+    def test_pastoral_capped_at_3_when_no(self):
         result = _base_result()
+        result["Kindness_and_Gentleness"]["Pastoral_Acknowledgement"] = "no"
         answer = "Election means God chose His people before the foundation of the world."
         result = calibrate_english_scores("What is election?", answer, result)
         assert result["Kindness_and_Gentleness"]["Pastoral_Sensitivity"] == 3
 
-    def test_pastoral_not_capped_with_signals(self):
+    def test_pastoral_capped_at_4_when_partial(self):
         result = _base_result()
+        result["Kindness_and_Gentleness"]["Pastoral_Acknowledgement"] = "partial"
+        answer = "Election means God chose His people before the foundation of the world."
+        result = calibrate_english_scores("What is election?", answer, result)
+        assert result["Kindness_and_Gentleness"]["Pastoral_Sensitivity"] == 4
+
+    def test_pastoral_not_capped_when_yes(self):
+        result = _base_result()
+        result["Kindness_and_Gentleness"]["Pastoral_Acknowledgement"] = "yes"
         answer = "I understand this can be difficult. The good news is that God's grace covers us."
         result = calibrate_english_scores("Am I saved?", answer, result)
+        assert result["Kindness_and_Gentleness"]["Pastoral_Sensitivity"] == 5
+
+    def test_pastoral_not_capped_when_none(self):
+        # No Pastoral_Acknowledgement field (legacy result) -> no cap applied
+        result = _base_result()
+        answer = "Election means God chose His people before the foundation of the world."
+        result = calibrate_english_scores("What is election?", answer, result)
         assert result["Kindness_and_Gentleness"]["Pastoral_Sensitivity"] == 5
 
     def test_pastoral_not_capped_when_already_3(self):
         result = _base_result()
         result["Kindness_and_Gentleness"]["Pastoral_Sensitivity"] = 3
+        result["Kindness_and_Gentleness"]["Pastoral_Acknowledgement"] = "no"
         answer = "Election is a doctrine about God's sovereignty."
         result = calibrate_english_scores("What is election?", answer, result)
         assert result["Kindness_and_Gentleness"]["Pastoral_Sensitivity"] == 3
 
     def test_all_caps_applied_together(self):
-        """Answer with no citations, no theology, no pastoral signals gets all three caps."""
+        """Answer with no citations, no theology, and Pastoral_Acknowledgement='no' gets all three caps."""
         result = _base_result()
+        result["Kindness_and_Gentleness"]["Pastoral_Acknowledgement"] = "no"
         answer = "God loves everyone and wants us to be good people and follow Him."
         result = calibrate_english_scores("What should I believe?", answer, result)
         assert result["Adherence"]["Biblical_Basis"] == 3
@@ -227,6 +212,7 @@ class TestCalibrateEnglishScores:
     def test_excellent_answer_no_caps(self):
         """A genuinely excellent answer should not be capped."""
         result = _base_result()
+        result["Kindness_and_Gentleness"]["Pastoral_Acknowledgement"] = "yes"
         answer = (
             "I understand your question, and it's a great one. "
             "The doctrine of justification by faith teaches that we are declared "

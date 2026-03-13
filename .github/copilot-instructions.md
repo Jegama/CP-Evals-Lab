@@ -22,7 +22,7 @@
 - Dual output: (1) comparison CSV with aggregated rubric means per model column; (2) results JSONL with detailed per-question evaluations appended to existing runs.
 - Comparison CSVs auto-place by mode: `training_datasets/evals/` (dataset/extended), `ft_evals/` (generate-ft_evals), `api_evals/` (generate-api_evals).
 - Judge model selection via `--judge-model` (default: gpt-5-mini); allows cross-judge validation by re-evaluating same dataset with different judges without regeneration.
-- Heuristics run in `parrot_ai/llm_evaluation.py`: parse responses → clamp scale → (Arabic) purity penalty → clamp overalls → knockout checks → boldness adjustments → final clamp; keep order intact.
+- Heuristics run in `parrot_ai/llm_evaluation.py`: parse responses → clamp scale → (Arabic) purity penalty → clamp overalls → ceiling-compression calibration → knockout checks → final clamp; keep order intact.
 - `BASE_CSV_ROWS` and `ARABIC_EXTRA_ROWS` dictate comparison CSV layout; add new rubric items in both schema (`evaluation_schemas.py`) and aggregation logic.
 - Comparison CSV columns append unless `--overwrite`; labels default from `gen_model` or `--answers-label`, sanitized via `sanitize_filename` for artifact names.
 - Meta rows track System_Prompt_Label, Judge_Model, Gen_Model, and Provider for each evaluation column.
