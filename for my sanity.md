@@ -95,3 +95,21 @@ python cp_eval_llms.py --language english --mode generate-api_evals --provider x
 
 # Anthropic Claude Haiku 4.5
 python cp_eval_llms.py --language english --mode generate-api_evals --provider anthropic --gen-model claude-haiku-4-5-20251001 --answers-label anthropic-claude-haiku-4-5-v1_3 --judge-model gpt-5-mini --use-system-prompt --system-prompt-label v1_3 --limit 0
+```
+
+### 7. System Prompt (v1.4) with GPT-5 Mini Judge
+
+```bash
+
+# Google Gemini 3 Flash
+python cp_eval_llms.py --language english --mode generate-api_evals --provider google --gen-model gemini-3-flash-preview --answers-label google-gemini-3-flash-v1_4 --judge-model gpt-5-mini --use-system-prompt --system-prompt-label v1_4 --limit 0
+
+# OpenAI GPT-5 Mini
+python cp_eval_llms.py --language english --mode generate-api_evals --provider openai --gen-model gpt-5-mini --answers-label openai-gpt-5-mini-v1_4 --judge-model gpt-5-mini --use-system-prompt --system-prompt-label v1_4 --limit 0
+
+# xAI Grok 4.1 Fast
+python cp_eval_llms.py --language english --mode generate-api_evals --provider xai --gen-model grok-4-1-fast-reasoning --answers-label xai-grok-4-1-fast-v1_4 --judge-model gpt-5-mini --use-system-prompt --system-prompt-label v1_4 --limit 0
+
+# Anthropic Claude Haiku 4.5
+python cp_eval_llms.py --language english --mode generate-api_evals --provider anthropic --gen-model claude-haiku-4-5-20251001 --answers-label anthropic-claude-haiku-4-5-v1_4 --judge-model gpt-5-mini --use-system-prompt --system-prompt-label v1_4 --limit 0
+```
