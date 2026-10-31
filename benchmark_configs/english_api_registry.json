@@ -200,6 +200,202 @@
     {
       "path": "data/english/api_evals/eval_results_xai-grok-4.5-v1_4__judged_by_gemini-3.6-flash.jsonl",
       "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.8-flash-v1_4__judged_by_gpt-5-mini.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.8-flash-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-5-mini-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3-flash-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_anthropic-claude-haiku-4-5-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_xai-grok-4.5-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-6-luna-v1_4__judged_by_gpt-5-mini.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-6-luna-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-5.6-luna-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3-5-flash-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.8-flash-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-6-luna-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-5-mini-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-5.6-luna-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3-flash-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3-5-flash-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_anthropic-claude-haiku-4-5-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_xai-grok-4.5-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.7-flash-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.8-flash-v1_4__judged_by_gemini-3.7-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-6-luna-v1_4__judged_by_gemini-3.7-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-5.6-luna-v1_4__judged_by_gemini-3.7-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3-5-flash-v1_4__judged_by_gemini-3.7-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.7-flash-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.8-flash-v1_4__judged_by_gpt-5.6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.7-flash-v1_4__judged_by_gpt-5.6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-6-luna-v1_4__judged_by_gpt-5.6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3-5-flash-v1_4__judged_by_gpt-5.6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_anthropic-claude-haiku-5-5-v1_4__judged_by_gpt-5-mini.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.6-flash-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_anthropic-claude-haiku-5-5-v1_4__judged_by_gemini-3.8-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.8-flash-v1_4__judged_by_gemini-3.6-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-6-luna-v1_4__judged_by_gemini-3.6-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-5.6-luna-v1_4__judged_by_gemini-3.6-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_anthropic-claude-haiku-5-5-v1_4__judged_by_gemini-3.6-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3-5-flash-v1_4__judged_by_gemini-3.6-flash.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.6-flash-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_anthropic-claude-haiku-5-5-v1_4__judged_by_gpt-6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_anthropic-claude-haiku-5-5-v1_4__judged_by_gpt-5.6-luna.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.8-flash-v1_4__judged_by_claude-haiku-5-5.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3.6-flash-v1_4__judged_by_claude-haiku-5-5.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-6-luna-v1_4__judged_by_claude-haiku-5-5.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-5.6-luna-v1_4__judged_by_claude-haiku-5-5.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_anthropic-claude-haiku-5-5-v1_4__judged_by_claude-haiku-5-5.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_openai-gpt-5-mini-v1_4__judged_by_claude-haiku-5-5.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3-flash-v1_4__judged_by_claude-haiku-5-5.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_google-gemini-3-5-flash-v1_4__judged_by_claude-haiku-5-5.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_anthropic-claude-haiku-4-5-v1_4__judged_by_claude-haiku-5-5.jsonl",
+      "eval_version": "v2"
+    },
+    {
+      "path": "data/english/api_evals/eval_results_xai-grok-4.5-v1_4__judged_by_claude-haiku-5-5.jsonl",
+      "eval_version": "v2"
     }
   ]
 }
