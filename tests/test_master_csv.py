@@ -211,8 +211,9 @@ def test_master_csv_does_not_rebase_unverified_external_dataset_paths(
     assert row["gen_model"] == "external-model"
 
 
+@pytest.mark.parametrize("error_value", ["transient judge failure", "", None, False, 0])
 def test_build_master_row_deduplicates_failed_attempt_before_successful_retry(
-    tmp_path: Path,
+    tmp_path: Path, error_value,
 ):
     results = tmp_path / "results.jsonl"
     _write_jsonl(
@@ -221,7 +222,7 @@ def test_build_master_row_deduplicates_failed_attempt_before_successful_retry(
             {
                 "question": "Q1",
                 "answer": "A1",
-                "error": "transient judge failure",
+                "error": error_value,
             },
             {
                 "question": "Q1",

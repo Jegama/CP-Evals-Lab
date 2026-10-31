@@ -6,6 +6,7 @@ from unittest.mock import Mock, create_autospec
 
 import anthropic
 import pytest
+from google.genai.errors import ClientError, ServerError
 
 import cp_eval_llms as cli
 import parrot_ai.llm_evaluation as evaluation_module
@@ -83,6 +84,33 @@ def test_authentication_failure_stops_immediately():
     engine.evaluate = Mock(side_effect=error)
     assert len(engine.batch_evaluate([("q", "a")] * 500, progress=False)) == 1
     assert engine.evaluate.call_count == 1
+
+
+@pytest.mark.parametrize("entrypoint", ["judge", "generation"])
+@pytest.mark.parametrize("code,attempts", [
+    (400, 1), (401, 1), (403, 1), (404, 1), (422, 1),
+    (429, 3), (500, 3), (503, 3),
+])
+def test_google_api_errors_respect_batch_cutoffs(monkeypatch, entrypoint, code, attempts):
+    # Use the installed SDK's actual exception shape, without issuing requests.
+    error_type = ClientError if code < 500 else ServerError
+    error = error_type(code, {"error": {"message": "offline regression"}})
+    engine = _engine()
+    engine.model = "gemini-3.8-flash"
+    engine.seed = 7
+    request = Mock(side_effect=error)
+    if entrypoint == "judge":
+        engine.client = SimpleNamespace(models=SimpleNamespace(generate_content=request))
+        results = engine.batch_evaluate([("q", "a")] * 10, progress=False)
+    else:
+        wrapper = Mock(generate=request)
+        monkeypatch.setattr(evaluation_module, "ParrotAIGemini", lambda **kwargs: wrapper)
+        results = engine.generate_responses(["q"] * 10, provider="google", progress=False)
+        assert results.aborted
+
+    assert request.call_count == attempts
+    assert len(results) == attempts
+    assert all(result["error"] == str(error) for result in results)
 
 
 def test_blank_answer_penalty_never_calls_a_judge():
@@ -197,17 +225,51 @@ def test_cli_all_failed_never_reports_success(tmp_path, monkeypatch, capsys):
     assert "[done] Completed" not in output
 
 
-def test_error_marked_dataset_record_is_not_treated_as_an_answer(tmp_path, monkeypatch):
+@pytest.mark.parametrize("error_value", ["generation failed", "", None, False, 0])
+@pytest.mark.parametrize("with_system_message", [False, True])
+def test_error_marked_dataset_record_is_not_treated_as_an_answer(
+    tmp_path, monkeypatch, error_value, with_system_message,
+):
     engine, args, path = _cli_fixture(tmp_path, monkeypatch, {"q1": "a1", "q2": "a2", "q3": "a3"})
     dataset = tmp_path / "answers.jsonl"
     records = [json.loads(line) for line in dataset.read_text().splitlines()]
-    records[1]["error"] = "generation failed"
+    records[1]["error"] = error_value
     records[1]["messages"][1]["content"] = "Provider error text, not an answer"
+    if with_system_message:
+        for record in records:
+            record["messages"].insert(0, {"role": "system", "content": "System prompt"})
     dataset.write_text("".join(json.dumps(r) + "\n" for r in records))
+    before = dataset.read_bytes()
     engine.evaluate = Mock(side_effect=AssertionError("must not call judge"))
     assert cli.main(args) == 1
     engine.evaluate.assert_not_called()
     assert not path.exists()
+    assert dataset.read_bytes() == before
+
+
+def test_generation_retries_error_marked_answer_with_empty_error(tmp_path, monkeypatch):
+    engine, args, path = _cli_fixture(tmp_path, monkeypatch, {"q1": "a1", "q2": "poisoned", "q3": "a3"})
+    dataset = tmp_path / "answers.jsonl"
+    records = [json.loads(line) for line in dataset.read_text().splitlines()]
+    records[1]["error"] = ""
+    dataset.write_text("".join(json.dumps(record) + "\n" for record in records))
+    before = dataset.read_bytes()
+    engine.evaluate = Mock(return_value={"Adherence": {"Core": 4}})
+    wrapper = Mock()
+    wrapper.generate.return_value = "recovered a2"
+    monkeypatch.setattr(evaluation_module, "ParrotAIClaude", lambda **kwargs: wrapper)
+    args[args.index("--mode") + 1] = "generate-api_evals"
+    args[args.index("--dataset")] = "--output-dataset"
+    args.extend(["--provider", "anthropic", "--gen-model", "claude-haiku-5-5"])
+
+    assert cli.main(args) == 0
+    assert [call.kwargs["prompt"] for call in wrapper.generate.call_args_list] == ["q2"]
+    assert [call.args for call in engine.evaluate.call_args_list] == [
+        ("q1", "a1"), ("q2", "recovered a2"), ("q3", "a3"),
+    ]
+    assert dataset.read_bytes().startswith(before)
+    assert len(dataset.read_text().splitlines()) == 4
+    assert len(path.read_text().splitlines()) == 3
 
 
 def test_empty_question_list_fails_without_reporting_completion(tmp_path, monkeypatch, capsys):

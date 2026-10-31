@@ -59,9 +59,13 @@ DEFAULT_MODEL = "gpt-5-mini"
 
 def _stop_after_error(error: Exception, consecutive_errors: int) -> bool:
     """Stop broken SDK/configuration calls immediately, other failures after three."""
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        # Google Gen AI exposes the HTTP status as `code`.
+        status_code = getattr(error, "code", None)
     return (
         isinstance(error, (TypeError, AttributeError))
-        or getattr(error, "status_code", None) in (400, 401, 403, 404, 422)
+        or status_code in (400, 401, 403, 404, 422)
         or consecutive_errors >= 3
     )
 

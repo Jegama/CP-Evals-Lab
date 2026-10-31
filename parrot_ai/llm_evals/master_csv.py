@@ -296,7 +296,7 @@ def build_master_row(
         include_arabic_accuracy=language == "arabic",
         question_tags=question_tags,
     )
-    error_count = sum(1 for record in all_records if record.get("error"))
+    error_count = sum(1 for record in all_records if "error" in record)
     run_identity = "|".join(
         [
             answers_label,

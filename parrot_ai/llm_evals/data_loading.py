@@ -42,7 +42,7 @@ def load_qa_pairs(
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(obj, dict) or obj.get("error"):
+            if not isinstance(obj, dict) or "error" in obj:
                 continue
             messages = obj.get("messages") or []
             if len(messages) >= 3:
