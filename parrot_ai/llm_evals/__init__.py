@@ -5,6 +5,7 @@ All public symbols are re-exported here so existing imports from
 """
 
 from .data_loading import load_qa_pairs, load_eval_questions
+from .score_validation import has_rubric_scores, is_scored_record
 from .arabic_heuristics import (
     ARABIC_BLOCKS,
     is_arabic_char,
@@ -83,6 +84,8 @@ __all__ = [
     # Data loading
     "load_qa_pairs",
     "load_eval_questions",
+    "has_rubric_scores",
+    "is_scored_record",
     # Arabic heuristics
     "ARABIC_BLOCKS",
     "is_arabic_char",

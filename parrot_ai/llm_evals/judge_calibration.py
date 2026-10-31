@@ -26,6 +26,7 @@ from .master_csv import (
     infer_dataset_metadata,
     load_jsonl,
 )
+from .score_validation import is_scored_record
 
 
 STUDY_SCHEMA_VERSION = 1
@@ -176,11 +177,10 @@ def _deduplicate_valid_records(records: Sequence[dict]) -> dict[str, dict]:
     by_question: dict[str, dict] = {}
     for record in records:
         question = record.get("question")
-        evaluation = record.get("evaluation")
         if (
             isinstance(question, str)
             and question
-            and isinstance(evaluation, dict)
+            and is_scored_record(record)
         ):
             by_question[question] = record
     return by_question

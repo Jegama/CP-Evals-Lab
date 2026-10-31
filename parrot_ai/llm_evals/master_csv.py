@@ -13,6 +13,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from .aggregation import aggregate_score_statistics, score_metric_order
+from .score_validation import is_scored_record
 
 
 MASTER_METADATA_COLUMNS = [
@@ -90,12 +91,27 @@ def _last_metadata_value(records: Sequence[dict], key: str) -> object:
 
 
 def _resolve_repo_path(value: object, repo_root: Path) -> Optional[Path]:
+    """Resolve dataset metadata, including paths saved in another checkout."""
     if not isinstance(value, str) or not value:
         return None
     path = Path(value)
+    repo_root = repo_root.resolve()
     if not path.is_absolute():
-        path = repo_root / path
-    return path.resolve()
+        return (repo_root / path).resolve()
+
+    resolved = path.resolve()
+    if resolved.is_relative_to(repo_root):
+        return resolved
+
+    # Historical benchmark records used .../CP-Evals-Lab/data/... paths. Prefer
+    # the current checkout, even if the old checkout still exists. Require the
+    # complete data-relative path and reject missing files or escaping symlinks.
+    for index in range(len(path.parts) - 1):
+        if path.parts[index:index + 2] == ("CP-Evals-Lab", "data"):
+            candidate = repo_root.joinpath(*path.parts[index + 1:]).resolve()
+            if candidate.is_relative_to(repo_root) and candidate.is_file():
+                return candidate
+    return resolved
 
 
 def infer_dataset_metadata(dataset_path: Optional[Path]) -> dict[str, object]:
@@ -223,7 +239,7 @@ def _deduplicate_evaluations(records: Sequence[dict]) -> list[dict]:
         if question not in seen_questions:
             seen_questions.add(question)
             order.append(question)
-        if isinstance(record.get("evaluation"), dict):
+        if is_scored_record(record):
             by_question[question] = record
     return [by_question[question] for question in order if question in by_question]
 
@@ -280,7 +296,7 @@ def build_master_row(
         include_arabic_accuracy=language == "arabic",
         question_tags=question_tags,
     )
-    error_count = sum(1 for record in all_records if record.get("error"))
+    error_count = sum(1 for record in all_records if "error" in record)
     run_identity = "|".join(
         [
             answers_label,

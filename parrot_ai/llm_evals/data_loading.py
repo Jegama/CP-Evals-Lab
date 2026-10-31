@@ -42,6 +42,8 @@ def load_qa_pairs(
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(obj, dict) or "error" in obj:
+                continue
             messages = obj.get("messages") or []
             if len(messages) >= 3:
                 user = (
@@ -54,7 +56,7 @@ def load_qa_pairs(
                     if isinstance(messages[2], dict)
                     else None
                 )
-                if user and assistant:
+                if isinstance(user, str) and user.strip() and isinstance(assistant, str) and assistant.strip():
                     if question_set is None or user in question_set:
                         pairs.append((user, assistant))
             elif len(messages) == 2:
@@ -68,7 +70,7 @@ def load_qa_pairs(
                     if isinstance(messages[1], dict)
                     else None
                 )
-                if user and assistant:
+                if isinstance(user, str) and user.strip() and isinstance(assistant, str) and assistant.strip():
                     if question_set is None or user in question_set:
                         pairs.append((user, assistant))
     # Re-order according to the question list if present

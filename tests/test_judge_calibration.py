@@ -65,6 +65,24 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
     )
 
 
+def test_loader_preserves_scores_after_empty_retry(tmp_path: Path):
+    results = tmp_path / "results.jsonl"
+    valid = {
+        "question": "Q1", "answer": "A1", "evaluation": {"Adherence": {"Core": 4}},
+        "answers_label": "answers", "judge_model": "judge-model",
+    }
+    _write_jsonl(results, [
+        valid,
+        {"question": "Q1", "answer": "A1", "evaluation": {"Adherence": {}}},
+        {"question": "Q2", "answer": "A2", "evaluation": {"Adherence": {}}},
+    ])
+
+    runs = load_evaluation_runs([ResultSource(results)], repo_root=tmp_path)
+
+    assert len(runs) == 1
+    assert runs[0].records_by_question == {"Q1": valid}
+
+
 def test_loader_normalizes_legacy_labels_using_dataset_metadata(tmp_path: Path):
     dataset = (
         tmp_path

@@ -50,10 +50,32 @@ from .llm_evals import (
     has_arabic_theological_terminology,
 )
 from .llm_evals.progress_reporting import emit_progress
+from .llm_evals.score_validation import has_rubric_scores
 
 load_dotenv()
 
 DEFAULT_MODEL = "gpt-5-mini"
+
+
+def _stop_after_error(error: Exception, consecutive_errors: int) -> bool:
+    """Stop broken SDK/configuration calls immediately, other failures after three."""
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        # Google Gen AI exposes the HTTP status as `code`.
+        status_code = getattr(error, "code", None)
+    return (
+        isinstance(error, (TypeError, AttributeError))
+        or status_code in (400, 401, 403, 404, 422)
+        or consecutive_errors >= 3
+    )
+
+
+class GenerationBatch(list[dict]):
+    """List-compatible attempted responses with an explicit failure-cutoff flag."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.aborted = False
 
 
 class EvaluationEngine:
@@ -215,7 +237,6 @@ class EvaluationEngine:
                 "max_tokens": 4096,
                 "messages": messages,
                 "output_format": response_model,
-                "temperature": 0.0,
             }
             if self.system_prompt:
                 parse_kwargs["system"] = self.system_prompt
@@ -247,6 +268,9 @@ class EvaluationEngine:
                     "Failed to parse evaluation result from OpenAI response"
                 )
             result_dict = json.loads(parsed.model_dump_json())
+        # Check before heuristics can create empty sections or coerce non-scores.
+        if not has_rubric_scores(result_dict):
+            raise ValueError("Judge returned no evaluation scores")
         result_dict = clamp_scale_scores(result_dict)
         # Only apply Arabic purity heuristics for Arabic language
         if self.language == "arabic" and "Arabic_Accuracy" in result_dict:
@@ -276,6 +300,9 @@ class EvaluationEngine:
             limit: Optional limit on the number of pairs to evaluate.
             progress: Whether to show a progress bar.
             stop_on_error: Whether to stop evaluation on the first error.
+
+        Otherwise, retain attempted results and stop on a permanent error or
+        three consecutive failures so callers can save and resume partial work.
         """
         out: list[dict] = []
         processed = 0
@@ -297,18 +324,27 @@ class EvaluationEngine:
             except Exception:  # noqa: BLE001
                 bar = None
         emit_progress("judging", 0, total)
+        consecutive_errors = 0
         for i, (q, a) in enumerate(pairs):
             if limit is not None and processed >= limit:
                 break
             try:
                 res = self.evaluate(q, a)
+                if not has_rubric_scores(res):
+                    raise ValueError("Judge returned no evaluation scores")
                 out.append({"index": i, "question": q, "answer": a, "evaluation": res})
+                consecutive_errors = 0
             except Exception as e:  # noqa: BLE001
                 if stop_on_error:
                     if bar:
                         bar.close()
                     raise
                 out.append({"index": i, "question": q, "error": str(e)})
+                consecutive_errors += 1
+                tqdm.write(f"[error] Evaluation {i + 1}: {e}")
+                if _stop_after_error(e, consecutive_errors):
+                    tqdm.write("[failed] Stopping judge batch; returning attempted results for resume.")
+                    break
             processed += 1
             if bar:
                 bar.update(1)
@@ -359,7 +395,7 @@ class EvaluationEngine:
         progress: bool = True,
         system: Optional[str] = None,
         **kwargs,
-    ) -> List[Dict[str, Any]]:
+    ) -> GenerationBatch:
         """Generate responses using any supported provider.
 
         Args:
@@ -369,6 +405,9 @@ class EvaluationEngine:
             progress: Whether to show progress bar
             system: Optional system prompt to pass to provider (None -> no system message)
             **kwargs: Additional arguments passed to the provider wrapper
+
+        Returns attempted responses. If ``aborted`` is true, persist successful
+        answers and defer further generation and judging to a later invocation.
         """
         # Provider mapping
         provider_classes = {
@@ -409,7 +448,7 @@ class EvaluationEngine:
         if model:
             wrapper.set_model(model)
 
-        out: List[Dict[str, Any]] = []
+        out = GenerationBatch()
         bar = None
         if progress:
             try:
@@ -422,9 +461,12 @@ class EvaluationEngine:
                 bar = None
 
         emit_progress("generating", 0, len(questions))
+        consecutive_errors = 0
         for i, q in enumerate(questions):
             try:
                 answer = wrapper.generate(prompt=q, model=use_model, system=system)
+                if not isinstance(answer, str) or not answer.strip():
+                    raise ValueError("Provider returned an empty answer")
                 out.append(
                     {
                         "index": i,
@@ -435,6 +477,7 @@ class EvaluationEngine:
                         "system_used": bool(system),
                     }
                 )
+                consecutive_errors = 0
             except Exception as e:
                 out.append(
                     {
@@ -446,6 +489,12 @@ class EvaluationEngine:
                         "system_used": bool(system),
                     }
                 )
+                consecutive_errors += 1
+                tqdm.write(f"[error] Generation {i + 1}: {e}")
+                if _stop_after_error(e, consecutive_errors):
+                    out.aborted = True
+                    tqdm.write("[failed] Stopping generation batch; returning attempted answers for resume.")
+                    break
 
             if bar:
                 bar.update(1)
@@ -460,7 +509,7 @@ class EvaluationEngine:
         question_file: str = "data/arabic/ar_eval_questions.txt",
         limit: int = 100,
         **kwargs,
-    ) -> List[Dict[str, Any]]:
+    ) -> GenerationBatch:
         """Load questions from file then call ``generate_responses``."""
         questions = load_eval_questions(question_file, limit=limit)
         return self.generate_responses(questions, **kwargs)
@@ -468,6 +517,7 @@ class EvaluationEngine:
 
 __all__ = [
     "EvaluationEngine",
+    "GenerationBatch",
     "load_qa_pairs",
     "load_eval_questions",
     "EvaluationResultArabic",

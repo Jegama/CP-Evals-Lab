@@ -25,10 +25,18 @@ from parrot_ai.llm_evals.benchmark_config import (
 )
 from parrot_ai.llm_evals.master_csv import ResultSource
 from parrot_ai.llm_evals.progress_reporting import PROGRESS_FILE_ENV
-from parrot_ai.llm_evals.result_registry import append_result_sources
+from parrot_ai.llm_evals.result_registry import append_result_sources, validate_result_source
 
 
 RunEvaluation = Callable[[list[str]], int]
+
+
+class BenchmarkRunError(RuntimeError):
+    """A failed round, retaining successful sources for registry publication."""
+
+    def __init__(self, message: str, completed_sources: list[ResultSource]):
+        super().__init__(message)
+        self.completed_sources = completed_sources
 
 
 @dataclass(frozen=True)
@@ -103,6 +111,7 @@ def _common_args(config: BenchmarkConfig) -> list[str]:
         "--question-tags",
         str(config.question_tags.resolve()),
         "--skip-comparison-csv",
+        "--require-complete-answers",
     ]
 
 
@@ -697,6 +706,8 @@ def _execute_operations(
                     display.finish(operation)
                     try:
                         exit_code = future.result()
+                        if exit_code == 0:
+                            validate_result_source(ResultSource(operation.result_path))
                     except Exception as exc:
                         exit_code = 1
                         display.write(
@@ -719,10 +730,15 @@ def _execute_operations(
         display.close()
 
     if failed_ids or skipped_ids:
-        raise RuntimeError(
+        raise BenchmarkRunError(
             "Benchmark finished with "
             f"{len(failed_ids)} failed and "
-            f"{len(skipped_ids)} dependency-skipped operations"
+            f"{len(skipped_ids)} dependency-skipped operations",
+            [
+                ResultSource(operation.result_path, config.eval_version)
+                for operation in operations
+                if operation.operation_id in completed_ids
+            ],
         )
 
 
@@ -774,6 +790,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     repo_root = Path.cwd()
     config = load_benchmark_config(args.config, repo_root)
     jobs = args.jobs or config.max_parallel_operations
+    exit_code = 0
     try:
         completed_sources = run_benchmark(
             config,
@@ -784,6 +801,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             live_progress=not args.no_live_progress,
             repo_root=repo_root,
         )
+    except BenchmarkRunError as exc:
+        print(f"[failed] {exc}")
+        completed_sources = exc.completed_sources
+        exit_code = 1
     except KeyboardInterrupt:
         print(
             "\n[interrupted] Benchmark stopped. Rerun the same command to reuse "
@@ -806,10 +827,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"[registry] Added {added} new result files -> "
                 f"{config.result_registry}"
             )
-        build_from_config(args.config, repo_root)
+        if exit_code == 0 or completed_sources:
+            build_from_config(args.config, repo_root)
     elif args.dry_run:
         print("\nDry run complete: no provider calls were made.")
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

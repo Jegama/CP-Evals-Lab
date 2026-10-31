@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .master_csv import ResultSource, load_jsonl
+from .score_validation import is_scored_record
 
 
 REGISTRY_SCHEMA_VERSION = 1
@@ -70,7 +71,7 @@ def validate_result_source(source: ResultSource) -> None:
     if not source.path.exists():
         raise FileNotFoundError(f"Completed evaluation result not found: {source.path}")
     records = load_jsonl(source.path)
-    if not any(isinstance(record.get("evaluation"), dict) for record in records):
+    if not any(is_scored_record(record) for record in records):
         raise ValueError(
             f"Completed evaluation result has no valid score records: {source.path}"
         )

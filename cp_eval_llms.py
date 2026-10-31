@@ -54,6 +54,7 @@ from parrot_ai.llm_evals import (
     build_rows_order,
 )
 from parrot_ai.llm_evals.master_csv import infer_dataset_metadata
+from parrot_ai.llm_evals.score_validation import is_scored_record
 
 
 def sanitize_filename(name: str) -> str:
@@ -86,7 +87,8 @@ def generate_dataset(
     limit: int = 100,
     system_prompt_label: Optional[str] = None,
     progress: bool = True,
-) -> str:
+) -> tuple[str, bool]:
+    """Persist successful answers and return the path and batch-aborted state."""
     # Load questions (limit=None means all if limit is 0)
     load_limit = None if limit == 0 else limit
     questions = load_eval_questions(questions_file, limit=load_limit)
@@ -141,7 +143,7 @@ def generate_dataset(
             if system_prompt_label:
                 obj["system_prompt_label"] = system_prompt_label
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    return str(out_path)
+    return str(out_path), responses.aborted
 
 
 def ensure_csv_structure(
@@ -310,6 +312,11 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help="Do not update the legacy transposed comparison CSV",
     )
     p.add_argument(
+        "--require-complete-answers",
+        action="store_true",
+        help="Fail before judging if any selected question has a missing or blank answer",
+    )
+    p.add_argument(
         "--results-jsonl",
         help="Override results JSONL filename (auto directory based on mode & language if relative)",
     )
@@ -457,19 +464,24 @@ def main(argv: List[str]) -> int:
                 f"[generate] Re-using existing generated dataset (no regeneration): {dataset_path}"
             )
         else:
-            dataset_path = Path(
-                generate_dataset(
-                    args.provider,
-                    questions_file,
-                    args.gen_model,
-                    engine,
-                    str(output_dataset_path),
-                    args.use_system_prompt,
-                    limit=args.limit,
-                    system_prompt_label=args.system_prompt_label,
-                    progress=not args.no_progress,
-                )
+            generated_path, generation_aborted = generate_dataset(
+                args.provider,
+                questions_file,
+                args.gen_model,
+                engine,
+                str(output_dataset_path),
+                args.use_system_prompt,
+                limit=args.limit,
+                system_prompt_label=args.system_prompt_label,
+                progress=not args.no_progress,
             )
+            dataset_path = Path(generated_path)
+            if generation_aborted:
+                print(
+                    f"[failed] Generation stopped; successful answers saved at {dataset_path}. "
+                    "Rerun to resume; no judge calls made."
+                )
+                return 1
             print(f"[generate] Dataset ready at {dataset_path}")
     else:  # MODE: dataset
         if not args.dataset:
@@ -549,7 +561,7 @@ def main(argv: List[str]) -> int:
         for q, a in raw_pairs:
             if q not in q_to_a:
                 q_to_a[q] = a
-        missing_questions = [q for q in eval_questions if q not in q_to_a]
+        missing_questions = [q for q in eval_questions if not q_to_a.get(q, "").strip()]
         if missing_questions:
             print(
                 f"[retry] {len(missing_questions)} missing answers detected, retrying generation..."
@@ -585,6 +597,12 @@ def main(argv: List[str]) -> int:
                         obj["system_prompt_label"] = args.system_prompt_label
                     f.write(json.dumps(obj, ensure_ascii=False) + "\n")
             print(f"[retry] Recovered {retried}/{len(missing_questions)} missing answers")
+            if retry_responses.aborted:
+                print(
+                    f"[failed] Generation stopped; successful answers saved at {dataset_path}. "
+                    "Rerun to resume; no judge calls made."
+                )
+                return 1
 
         missing = 0
         pairs: List[Tuple[str, str]] = []
@@ -641,6 +659,18 @@ def main(argv: List[str]) -> int:
                 f"[load] Filtered {len(pairs)} evaluation pairs from dataset (strict 100-question set)."
             )
 
+    if not pairs:
+        print("[failed] No question/answer pairs available for evaluation.")
+        return 1
+    if args.require_complete_answers:
+        missing_answers = sum(not answer.strip() for _, answer in pairs)
+        if missing_answers:
+            print(
+                f"[failed] {missing_answers}/{len(pairs)} answers are missing or blank. "
+                "Repair or resume answer generation before judging; no judge calls made."
+            )
+            return 1
+
     # Results JSONL placement (mode dependent) -- resolve path BEFORE evaluation
     if args.mode in ("dataset", "extended"):
         default_results_dir = training_evals_dir
@@ -673,10 +703,9 @@ def main(argv: List[str]) -> int:
                 except json.JSONDecodeError:
                     continue
                 q = obj.get("question", "")
-                ev = obj.get("evaluation")
                 answer = obj.get("answer", "")
                 # Keep result if it has a valid evaluation and the answer wasn't empty
-                if q and ev and answer:
+                if q and is_scored_record(obj) and isinstance(answer, str) and answer.strip():
                     existing_results[q] = obj
         print(f"[eval] Found {len(existing_results)} existing evaluations in {results_jsonl}")
 
@@ -708,6 +737,8 @@ def main(argv: List[str]) -> int:
             # Should not happen, but fail gracefully
             results.append({"question": q, "answer": a, "error": "no evaluation"})
 
+    failed_count = sum(not is_scored_record(result) for result in results)
+
     # Load question tags for selective scoring (English only)
     question_tags: Optional[Dict[str, dict]] = None
     if args.question_tags:
@@ -732,7 +763,9 @@ def main(argv: List[str]) -> int:
         print(f"  {k}: {aggregated[k]}")
 
     # Update the legacy transposed comparison CSV unless the batch workflow opts out.
-    if args.skip_comparison_csv:
+    if failed_count:
+        print("[csv] Skipped comparison CSV update because evaluation is incomplete.")
+    elif args.skip_comparison_csv:
         print("[csv] Skipped legacy comparison CSV update.")
     else:
         rows_order = build_rows_order(include_arabic_accuracy)
@@ -752,9 +785,16 @@ def main(argv: List[str]) -> int:
             meta_values=csv_meta_values,
         )
 
-    # Write full results JSONL (overwrite with clean merged set)
+    # Keep in-repository dataset metadata portable without changing external paths.
+    dataset_absolute = dataset_path.resolve()
+    try:
+        dataset_metadata_path = dataset_absolute.relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        dataset_metadata_path = str(dataset_absolute)
+
+    # Append attempted results, including errors, so successful work is resumable.
     meta = {
-        "dataset": str(dataset_path),
+        "dataset": dataset_metadata_path,
         "answers_label": answers_label,
         "judge_model": args.judge_model,
         "gen_model": effective_gen_model,
@@ -772,6 +812,12 @@ def main(argv: List[str]) -> int:
         append_results_jsonl(results_jsonl, new_results, meta)
     else:
         print(f"[results] No new results to append to {results_jsonl}")
+    if failed_count:
+        print(
+            f"[failed] {failed_count}/{len(pairs)} evaluations failed or were not attempted. "
+            "Successful scores were preserved; rerun to retry unfinished questions."
+        )
+        return 1
     print("[done] Completed.")
     return 0
 
