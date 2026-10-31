@@ -128,6 +128,34 @@ def _cli_fixture(tmp_path, monkeypatch, answers):
     return engine, args, results
 
 
+@pytest.mark.parametrize("dataset_location", ["absolute", "relative", "external"])
+def test_cli_records_portable_dataset_paths(tmp_path, monkeypatch, dataset_location):
+    repo_root = tmp_path / "checkout"
+    repo_root.mkdir()
+    engine, args, results = _cli_fixture(
+        repo_root, monkeypatch, {"q1": "a1", "q2": "a2", "q3": "a3"},
+    )
+    dataset = repo_root / "answers.jsonl"
+    expected_path = "answers.jsonl"
+    if dataset_location == "external":
+        external = tmp_path / "external-answers.jsonl"
+        dataset.rename(external)
+        dataset = external
+        expected_path = str(external.resolve())
+        args[args.index("--dataset") + 1] = str(external)
+    elif dataset_location == "relative":
+        args[args.index("--dataset") + 1] = "answers.jsonl"
+    original = dataset.read_bytes()
+    engine.evaluate = Mock(return_value={"Adherence": {"Core": 4}})
+
+    assert cli.main([*args, "--skip-comparison-csv"]) == 0
+
+    saved = [json.loads(line) for line in results.read_text().splitlines()]
+    assert len(saved) == 3
+    assert all(record["dataset"] == expected_path for record in saved)
+    assert dataset.read_bytes() == original
+
+
 @pytest.mark.parametrize("answer", ["", " \n"])
 def test_incomplete_dataset_is_rejected_before_judging(tmp_path, monkeypatch, answer):
     engine, args, results = _cli_fixture(tmp_path, monkeypatch, {"q1": "a1", "q2": answer})

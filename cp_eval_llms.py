@@ -776,9 +776,16 @@ def main(argv: List[str]) -> int:
             meta_values=csv_meta_values,
         )
 
+    # Keep in-repository dataset metadata portable without changing external paths.
+    dataset_absolute = dataset_path.resolve()
+    try:
+        dataset_metadata_path = dataset_absolute.relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        dataset_metadata_path = str(dataset_absolute)
+
     # Append attempted results, including errors, so successful work is resumable.
     meta = {
-        "dataset": str(dataset_path),
+        "dataset": dataset_metadata_path,
         "answers_label": answers_label,
         "judge_model": args.judge_model,
         "gen_model": effective_gen_model,

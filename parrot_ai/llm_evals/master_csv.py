@@ -90,12 +90,27 @@ def _last_metadata_value(records: Sequence[dict], key: str) -> object:
 
 
 def _resolve_repo_path(value: object, repo_root: Path) -> Optional[Path]:
+    """Resolve dataset metadata, including paths saved in another checkout."""
     if not isinstance(value, str) or not value:
         return None
     path = Path(value)
+    repo_root = repo_root.resolve()
     if not path.is_absolute():
-        path = repo_root / path
-    return path.resolve()
+        return (repo_root / path).resolve()
+
+    resolved = path.resolve()
+    if resolved.is_relative_to(repo_root):
+        return resolved
+
+    # Historical benchmark records used .../CP-Evals-Lab/data/... paths. Prefer
+    # the current checkout, even if the old checkout still exists. Require the
+    # complete data-relative path and reject missing files or escaping symlinks.
+    for index in range(len(path.parts) - 1):
+        if path.parts[index:index + 2] == ("CP-Evals-Lab", "data"):
+            candidate = repo_root.joinpath(*path.parts[index + 1:]).resolve()
+            if candidate.is_relative_to(repo_root) and candidate.is_file():
+                return candidate
+    return resolved
 
 
 def infer_dataset_metadata(dataset_path: Optional[Path]) -> dict[str, object]:

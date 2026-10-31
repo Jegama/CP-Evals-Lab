@@ -346,6 +346,8 @@ Models marked `judge_contender` are also used as judges. Each contender scores t
 
 `result_registry` is the canonical append-only list of runs included in the master CSV. It is seeded with the original 25 dashboard runs. After the selected benchmark operations finish, successful operations' validated result files are appended atomically in deterministic plan order, even when other operations fail; existing paths are deduplicated. Changing the active `models` list therefore never removes earlier master rows. `provider_leaders` remains manually maintained and is never changed automatically.
 
+New evaluation results store in-repository `dataset` paths relative to the working repository root. When rebuilding the master CSV, legacy absolute paths containing `CP-Evals-Lab/data/` resolve to the matching file in the current checkout only if that file exists and resolves inside the repository. External or unmatched paths retain their absolute location; historical JSONL files are never rewritten by this normalization.
+
 The current manifest defines:
 
 - New answer sets: Grok 4.5, GPT-5.6 Luna, Gemini 3.6 Flash, and Gemini 3.5 Flash-Lite.
