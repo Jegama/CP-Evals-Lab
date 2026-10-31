@@ -14,12 +14,27 @@
   "models": [
     {
       "provider": "google",
-      "model": "gemini-3.7-flash",
+      "model": "gemini-3.8-flash",
       "judge_contender": true
     },
     {
       "provider": "google",
       "model": "gemini-3.6-flash",
+      "judge_contender": true
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "judge_contender": true
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.6-luna",
+      "judge_contender": true
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5",
       "judge_contender": true
     }
   ],
@@ -31,10 +46,22 @@
       "dataset": "data/english/api_evals/generated_api_openai_openai-gpt-5-mini-v1_4.jsonl"
     },
     {
+      "provider": "openai",
+      "model": "gpt-5.6-luna",
+      "answers_label": "openai-gpt-5.6-luna-v1_4",
+      "dataset": "data/english/api_evals/generated_api_openai_openai-gpt-5.6-luna-v1_4.jsonl"
+    },
+    {
       "provider": "google",
       "model": "gemini-3-flash",
       "answers_label": "google-gemini-3-flash-v1_4",
       "dataset": "data/english/api_evals/generated_api_google_google-gemini-3-flash-v1_4.jsonl"
+    },
+    {
+      "provider": "google",
+      "model": "gemini-3.5-flash",
+      "answers_label": "google-gemini-3-5-flash-v1_4",
+      "dataset": "data/english/api_evals/generated_api_google_google-gemini-3-5-flash-v1_4.jsonl"
     },
     {
       "provider": "anthropic",
