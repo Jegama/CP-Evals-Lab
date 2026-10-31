@@ -20,6 +20,7 @@ from parrot_ai.evaluation_schemas import (
 )
 
 from .score_processing import compute_weighted_final_score
+from .score_validation import is_scored_record
 
 
 CORE_SECTION_ORDER = [
@@ -183,9 +184,9 @@ def aggregate_score_statistics(
     series: Dict[tuple[str, str], list[float]] = {}
 
     for item in results:
-        evaluation = item.get("evaluation")
-        if not isinstance(evaluation, dict):
+        if not is_scored_record(item):
             continue
+        evaluation = item["evaluation"]
 
         question_text = item.get("question", "")
         question_tag: Optional[Mapping[str, object]] = None

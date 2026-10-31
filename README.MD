@@ -350,15 +350,15 @@ New evaluation results store in-repository `dataset` paths relative to the worki
 
 The current manifest defines:
 
-- New answer sets: Grok 4.5, GPT-5.6 Luna, Gemini 3.6 Flash, and Gemini 3.5 Flash-Lite.
+- Active answer sets: Gemini 3.8 Flash, GPT-6 Luna, and Claude Haiku 5.5.
 - Default judge: GPT-5 Mini.
-- Judge contender: GPT-5.6 Luna.
-- Provider leaders: GPT-5 Mini, Gemini 3 Flash, Claude Haiku 4.5, and Grok 4.1 Fast.
+- Judge contenders: Gemini 3.8 Flash, GPT-6 Luna, and Claude Haiku 5.5.
+- Provider leaders: GPT-5 Mini, GPT-5.6 Luna, GPT-6 Luna, Gemini 3 Flash, Gemini 3.5 Flash, Gemini 3.8 Flash, Claude Haiku 4.5, Claude Haiku 5.5, Grok 4.3, and Grok 4.5.
 - English's full 500-question set (`limit: 0`).
 
 Each operation runs in an isolated Python subprocess and writes to its own file under `data/english/api_evals/logs/`, so parallel output does not become interleaved. The parent runner shows one live tqdm bar per active worker, switching each bar from generation to judging as the operation advances; pass `--no-live-progress` to suppress them. Existing generated datasets and per-question judge results are reused, so rerunning the command resumes missing work instead of restarting the round. A failed generation skips only contender evaluations that depend on its dataset; independent work is allowed to finish. Successful operations still reach the registry and master CSV, while the round exits with failure if any operation failed or was dependency-skipped.
 
-Benchmark operations always pass `--require-complete-answers`: missing, blank, or explicitly error-marked source answers block judging before any judge requests. Standalone `cp_eval_llms.py` callers can opt into the same guard; without it, missing answers retain the existing local minimum-score penalty, which does not call a judge. Generation and judging stop immediately on SDK signature errors or permanent HTTP request failures (400, 401, 403, 404, 422), and after three consecutive other failures. The provider SDK may perform its own retries within each attempt. Attempted results are preserved, incomplete evaluation exits with failure, and an error-only result file cannot be reported as a completed benchmark operation.
+Benchmark operations always pass `--require-complete-answers`: missing, blank, or explicitly error-marked source answers block judging before any judge requests. Standalone `cp_eval_llms.py` callers can opt into the same guard; without it, missing answers retain the existing local minimum-score penalty, which does not call a judge. Generation and judging stop immediately on SDK signature errors or permanent HTTP request failures (400, 401, 403, 404, 422), and after three consecutive other failures. The provider SDK may perform its own retries within each attempt. When generation hits this cutoff, the CLI saves successful answers and exits with failure before any further generation or judging; a later invocation resumes missing answers. Attempted evaluation results are preserved, and incomplete evaluation exits with failure. Accepting, reusing, and publishing evaluations requires at least one integer score in a recognized rubric field; empty sections and metadata alone do not count as scores, and error-marked records are excluded.
 
 Run one phase explicitly or override concurrency when useful:
 

@@ -97,9 +97,18 @@ def test_default_registry_retains_seeded_runs_and_valid_unique_paths():
     assert all(source.path.exists() for source in sources)
 
 
-def test_empty_evaluation_object_cannot_be_registered(tmp_path):
+@pytest.mark.parametrize("evaluation", [
+    {},
+    {"Adherence": {}, "Interfaith_Sensitivity": {}, "Arabic_Accuracy": {}},
+    {"Kindness_and_Gentleness": {"Pastoral_Acknowledgement": "yes"}},
+    {"Arabic_Accuracy": {"Heuristic_Arabic_Purity_Pct": 100}},
+    {"Adherence": {"Core": True}},
+    {"Adherence": {"Core": "4"}},
+    {"Adherence": {"unknown": 4}},
+])
+def test_empty_evaluation_object_cannot_be_registered(tmp_path, evaluation):
     results = tmp_path / "empty-scores.jsonl"
-    results.write_text(json.dumps({"question": "Question", "answer": "Answer", "evaluation": {}}) + "\n")
+    results.write_text(json.dumps({"question": "Question", "answer": "Answer", "evaluation": evaluation}) + "\n")
     registry = tmp_path / "registry.json"
     with pytest.raises(ValueError, match="no valid score records"):
         append_result_sources(registry, [ResultSource(results)], repo_root=tmp_path)

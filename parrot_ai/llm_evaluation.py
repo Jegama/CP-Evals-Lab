@@ -50,6 +50,7 @@ from .llm_evals import (
     has_arabic_theological_terminology,
 )
 from .llm_evals.progress_reporting import emit_progress
+from .llm_evals.score_validation import has_rubric_scores
 
 load_dotenv()
 
@@ -63,6 +64,14 @@ def _stop_after_error(error: Exception, consecutive_errors: int) -> bool:
         or getattr(error, "status_code", None) in (400, 401, 403, 404, 422)
         or consecutive_errors >= 3
     )
+
+
+class GenerationBatch(list[dict]):
+    """List-compatible attempted responses with an explicit failure-cutoff flag."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.aborted = False
 
 
 class EvaluationEngine:
@@ -255,6 +264,9 @@ class EvaluationEngine:
                     "Failed to parse evaluation result from OpenAI response"
                 )
             result_dict = json.loads(parsed.model_dump_json())
+        # Check before heuristics can create empty sections or coerce non-scores.
+        if not has_rubric_scores(result_dict):
+            raise ValueError("Judge returned no evaluation scores")
         result_dict = clamp_scale_scores(result_dict)
         # Only apply Arabic purity heuristics for Arabic language
         if self.language == "arabic" and "Arabic_Accuracy" in result_dict:
@@ -314,7 +326,7 @@ class EvaluationEngine:
                 break
             try:
                 res = self.evaluate(q, a)
-                if not isinstance(res, dict) or not res:
+                if not has_rubric_scores(res):
                     raise ValueError("Judge returned no evaluation scores")
                 out.append({"index": i, "question": q, "answer": a, "evaluation": res})
                 consecutive_errors = 0
@@ -379,7 +391,7 @@ class EvaluationEngine:
         progress: bool = True,
         system: Optional[str] = None,
         **kwargs,
-    ) -> List[Dict[str, Any]]:
+    ) -> GenerationBatch:
         """Generate responses using any supported provider.
 
         Args:
@@ -389,6 +401,9 @@ class EvaluationEngine:
             progress: Whether to show progress bar
             system: Optional system prompt to pass to provider (None -> no system message)
             **kwargs: Additional arguments passed to the provider wrapper
+
+        Returns attempted responses. If ``aborted`` is true, persist successful
+        answers and defer further generation and judging to a later invocation.
         """
         # Provider mapping
         provider_classes = {
@@ -429,7 +444,7 @@ class EvaluationEngine:
         if model:
             wrapper.set_model(model)
 
-        out: List[Dict[str, Any]] = []
+        out = GenerationBatch()
         bar = None
         if progress:
             try:
@@ -473,6 +488,7 @@ class EvaluationEngine:
                 consecutive_errors += 1
                 tqdm.write(f"[error] Generation {i + 1}: {e}")
                 if _stop_after_error(e, consecutive_errors):
+                    out.aborted = True
                     tqdm.write("[failed] Stopping generation batch; returning attempted answers for resume.")
                     break
 
@@ -489,7 +505,7 @@ class EvaluationEngine:
         question_file: str = "data/arabic/ar_eval_questions.txt",
         limit: int = 100,
         **kwargs,
-    ) -> List[Dict[str, Any]]:
+    ) -> GenerationBatch:
         """Load questions from file then call ``generate_responses``."""
         questions = load_eval_questions(question_file, limit=limit)
         return self.generate_responses(questions, **kwargs)
@@ -497,6 +513,7 @@ class EvaluationEngine:
 
 __all__ = [
     "EvaluationEngine",
+    "GenerationBatch",
     "load_qa_pairs",
     "load_eval_questions",
     "EvaluationResultArabic",

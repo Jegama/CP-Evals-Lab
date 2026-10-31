@@ -32,7 +32,7 @@ def test_emit_progress_writes_json_lines_only_when_requested(tmp_path, monkeypat
 
 def test_batch_evaluate_emits_progress_when_local_tqdm_is_disabled(monkeypatch):
     engine = object.__new__(EvaluationEngine)
-    engine.evaluate = lambda question, answer: {"score": len(question + answer)}
+    engine.evaluate = lambda question, answer: {"Adherence": {"Core": len(question + answer)}}
     events = []
     monkeypatch.setattr(
         evaluation_module,

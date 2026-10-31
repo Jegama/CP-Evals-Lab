@@ -54,6 +54,7 @@ from parrot_ai.llm_evals import (
     build_rows_order,
 )
 from parrot_ai.llm_evals.master_csv import infer_dataset_metadata
+from parrot_ai.llm_evals.score_validation import is_scored_record
 
 
 def sanitize_filename(name: str) -> str:
@@ -86,7 +87,8 @@ def generate_dataset(
     limit: int = 100,
     system_prompt_label: Optional[str] = None,
     progress: bool = True,
-) -> str:
+) -> tuple[str, bool]:
+    """Persist successful answers and return the path and batch-aborted state."""
     # Load questions (limit=None means all if limit is 0)
     load_limit = None if limit == 0 else limit
     questions = load_eval_questions(questions_file, limit=load_limit)
@@ -141,7 +143,7 @@ def generate_dataset(
             if system_prompt_label:
                 obj["system_prompt_label"] = system_prompt_label
             f.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    return str(out_path)
+    return str(out_path), responses.aborted
 
 
 def ensure_csv_structure(
@@ -462,19 +464,24 @@ def main(argv: List[str]) -> int:
                 f"[generate] Re-using existing generated dataset (no regeneration): {dataset_path}"
             )
         else:
-            dataset_path = Path(
-                generate_dataset(
-                    args.provider,
-                    questions_file,
-                    args.gen_model,
-                    engine,
-                    str(output_dataset_path),
-                    args.use_system_prompt,
-                    limit=args.limit,
-                    system_prompt_label=args.system_prompt_label,
-                    progress=not args.no_progress,
-                )
+            generated_path, generation_aborted = generate_dataset(
+                args.provider,
+                questions_file,
+                args.gen_model,
+                engine,
+                str(output_dataset_path),
+                args.use_system_prompt,
+                limit=args.limit,
+                system_prompt_label=args.system_prompt_label,
+                progress=not args.no_progress,
             )
+            dataset_path = Path(generated_path)
+            if generation_aborted:
+                print(
+                    f"[failed] Generation stopped; successful answers saved at {dataset_path}. "
+                    "Rerun to resume; no judge calls made."
+                )
+                return 1
             print(f"[generate] Dataset ready at {dataset_path}")
     else:  # MODE: dataset
         if not args.dataset:
@@ -590,6 +597,12 @@ def main(argv: List[str]) -> int:
                         obj["system_prompt_label"] = args.system_prompt_label
                     f.write(json.dumps(obj, ensure_ascii=False) + "\n")
             print(f"[retry] Recovered {retried}/{len(missing_questions)} missing answers")
+            if retry_responses.aborted:
+                print(
+                    f"[failed] Generation stopped; successful answers saved at {dataset_path}. "
+                    "Rerun to resume; no judge calls made."
+                )
+                return 1
 
         missing = 0
         pairs: List[Tuple[str, str]] = []
@@ -690,10 +703,9 @@ def main(argv: List[str]) -> int:
                 except json.JSONDecodeError:
                     continue
                 q = obj.get("question", "")
-                ev = obj.get("evaluation")
                 answer = obj.get("answer", "")
                 # Keep result if it has a valid evaluation and the answer wasn't empty
-                if q and isinstance(ev, dict) and ev and answer.strip():
+                if q and is_scored_record(obj) and isinstance(answer, str) and answer.strip():
                     existing_results[q] = obj
         print(f"[eval] Found {len(existing_results)} existing evaluations in {results_jsonl}")
 
@@ -725,10 +737,7 @@ def main(argv: List[str]) -> int:
             # Should not happen, but fail gracefully
             results.append({"question": q, "answer": a, "error": "no evaluation"})
 
-    failed_count = sum(
-        not isinstance(result.get("evaluation"), dict) or not result["evaluation"]
-        for result in results
-    )
+    failed_count = sum(not is_scored_record(result) for result in results)
 
     # Load question tags for selective scoring (English only)
     question_tags: Optional[Dict[str, dict]] = None

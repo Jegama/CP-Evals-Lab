@@ -107,6 +107,31 @@ def test_build_master_row_infers_answer_identity_and_latest_timestamp(tmp_path: 
     assert str(row["run_id"]).startswith("eval_")
 
 
+@pytest.mark.parametrize("later_record", [
+    {"evaluation": {"Adherence": {}, "Arabic_Accuracy": {}}},
+    {"evaluation": _score_payload(1), "error": "failed retry"},
+])
+def test_scoreless_or_failed_retry_preserves_valid_master_scores(tmp_path, later_record):
+    results = tmp_path / "results.jsonl"
+    valid = {"question": "Q1", "answer": "A1", "evaluation": _score_payload(5)}
+    _write_jsonl(results, [valid, {"question": "Q1", "answer": "A1", **later_record}])
+
+    row = build_master_row(ResultSource(results), repo_root=tmp_path)
+
+    assert row["question_count"] == 1
+    assert row["adherence_core_mean"] == 5.0
+
+
+def test_master_rejects_scoreless_evaluations(tmp_path):
+    results = tmp_path / "results.jsonl"
+    _write_jsonl(results, [{
+        "question": "Q1", "answer": "A1", "evaluation": {"Adherence": {}},
+    }])
+
+    with pytest.raises(ValueError, match="No valid evaluations"):
+        build_master_row(ResultSource(results), repo_root=tmp_path)
+
+
 @pytest.mark.parametrize("author_dataset_exists", [True, False])
 def test_master_csv_is_portable_with_legacy_absolute_dataset_paths(
     tmp_path: Path, author_dataset_exists: bool,

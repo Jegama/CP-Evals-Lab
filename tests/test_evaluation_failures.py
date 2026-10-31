@@ -59,16 +59,17 @@ def test_permanent_sdk_error_stops_after_one_attempt(error, capsys):
 
 def test_repeated_transient_failures_stop_but_preserve_prior_success():
     engine = _engine()
-    engine.evaluate = Mock(side_effect=[{"score": 4}, *[RuntimeError("unavailable")] * 3])
+    score = {"Adherence": {"Core": 4}}
+    engine.evaluate = Mock(side_effect=[score, *[RuntimeError("unavailable")] * 3])
     results = engine.batch_evaluate([(f"q{i}", "answer") for i in range(500)], progress=False)
     assert engine.evaluate.call_count == 4
-    assert results[0]["evaluation"] == {"score": 4}
+    assert results[0]["evaluation"] == score
     assert len(results) == 4
 
 
 def test_isolated_failures_do_not_stop_subsequent_successes():
     engine = _engine()
-    outcomes = [RuntimeError("temporary"), {"score": 4}] * 4
+    outcomes = [RuntimeError("temporary"), {"Adherence": {"Core": 4}}] * 4
     engine.evaluate = Mock(side_effect=outcomes)
     results = engine.batch_evaluate([(f"q{i}", "answer") for i in range(8)], progress=False)
     assert len(results) == 8
@@ -224,3 +225,99 @@ def test_stop_on_error_still_raises():
     engine.evaluate = Mock(side_effect=RuntimeError("judge unavailable"))
     with pytest.raises(RuntimeError, match="judge unavailable"):
         engine.batch_evaluate([("q1", "a1")], progress=False, stop_on_error=True)
+
+
+@pytest.mark.parametrize("language", ["english", "arabic"])
+@pytest.mark.parametrize("parsed,text", [
+    (None, ""), (None, "{}"), ({}, None),
+    ({"Adherence": {"Core": "4"}}, None),
+    ({"Adherence": {"Core": True}}, None),
+    ({"Arabic_Accuracy": {"Heuristic_Arabic_Purity_Pct": 100}}, None),
+])
+def test_empty_gemini_output_is_a_failed_evaluation(language, parsed, text):
+    engine = _engine()
+    engine.language = language
+    engine.model = "gemini-3.8-flash"
+    engine.seed = 7
+    generate = Mock(return_value=SimpleNamespace(parsed=parsed, text=text))
+    engine.client = SimpleNamespace(models=SimpleNamespace(generate_content=generate))
+
+    results = engine.batch_evaluate([("Question", "Answer")] * 10, progress=False)
+
+    assert generate.call_count == 3
+    assert len(results) == 3
+    assert all("evaluation" not in result and "scores" in result["error"] for result in results)
+
+
+@pytest.mark.parametrize("invalid", [
+    {},
+    {"Adherence": {}, "Interfaith_Sensitivity": {}, "Arabic_Accuracy": {}},
+    {"Kindness_and_Gentleness": {"Pastoral_Acknowledgement": "yes"}},
+    {"Adherence": {"Core": "4"}},
+    {"Adherence": {"Core": True}},
+    {"Adherence": {"unknown": 4}},
+])
+def test_cli_retries_scoreless_results_and_does_not_publish_them(tmp_path, monkeypatch, invalid):
+    engine, args, path = _cli_fixture(tmp_path, monkeypatch, {"q1": "a1", "q2": "a2", "q3": "a3"})
+    path.write_text("".join(json.dumps({
+        "question": f"q{i}", "answer": f"a{i}", "evaluation": invalid,
+    }) + "\n" for i in range(1, 4)))
+    before = path.read_bytes()
+    engine.evaluate = Mock(return_value=invalid)
+
+    assert cli.main(args) == 1
+    assert engine.evaluate.call_count == 3
+    assert path.read_bytes().startswith(before)
+    assert not (tmp_path / "data/english/training_datasets/evals/dataset_eval_comparison.csv").exists()
+
+    engine.evaluate = Mock(return_value={"Adherence": {"Core": 4}})
+    assert cli.main(args) == 0
+    assert [call.args[0] for call in engine.evaluate.call_args_list] == ["q1", "q2", "q3"]
+
+
+@pytest.mark.parametrize("existing_dataset", [False, True])
+@pytest.mark.parametrize("require_complete", [False, True])
+@pytest.mark.parametrize("permanent", [False, True])
+def test_cli_generation_cutoff_preserves_answers_for_later_resume(
+    tmp_path, monkeypatch, existing_dataset, require_complete, permanent,
+):
+    monkeypatch.chdir(tmp_path)
+    questions = tmp_path / "questions.txt"
+    questions.write_text("".join(f"q{i}\n" for i in range(1, 7)))
+    dataset = tmp_path / "generated.jsonl"
+    if existing_dataset:
+        dataset.touch()
+    engine = _engine()
+    engine.evaluate = Mock(return_value={"Adherence": {"Core": 4}})
+    monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
+    error = TypeError("bad SDK argument") if permanent else RuntimeError("unavailable")
+    wrapper = Mock()
+    wrapper.generate.side_effect = ["a1", *[error] * 20]
+    monkeypatch.setattr(evaluation_module, "ParrotAIClaude", lambda **kwargs: wrapper)
+    results = tmp_path / "results.jsonl"
+    args = [
+        "--mode", "generate-api_evals", "--language", "english", "--limit", "0",
+        "--provider", "anthropic", "--gen-model", "claude-haiku-5-5",
+        "--questions-file", str(questions), "--output-dataset", str(dataset),
+        "--results-jsonl", str(results), "--no-progress", "--skip-comparison-csv",
+    ]
+    if require_complete:
+        args.append("--require-complete-answers")
+
+    assert cli.main(args) == 1
+    assert wrapper.generate.call_count == (2 if permanent else 4)
+    engine.evaluate.assert_not_called()
+    assert not results.exists()
+    before = dataset.read_bytes()
+    assert len(before.splitlines()) == 1
+    assert json.loads(before)["messages"][1]["content"] == "a1"
+
+    wrapper.generate.reset_mock(side_effect=True)
+    wrapper.generate.side_effect = lambda prompt, **kwargs: f"answer to {prompt}"
+    assert cli.main(args) == 0
+    assert [call.kwargs["prompt"] for call in wrapper.generate.call_args_list] == [
+        "q2", "q3", "q4", "q5", "q6",
+    ]
+    assert engine.evaluate.call_count == 6
+    assert dataset.read_bytes().startswith(before)
+    assert len(dataset.read_text().splitlines()) == 6

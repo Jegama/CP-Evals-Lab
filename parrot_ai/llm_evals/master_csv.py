@@ -13,6 +13,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from .aggregation import aggregate_score_statistics, score_metric_order
+from .score_validation import is_scored_record
 
 
 MASTER_METADATA_COLUMNS = [
@@ -238,7 +239,7 @@ def _deduplicate_evaluations(records: Sequence[dict]) -> list[dict]:
         if question not in seen_questions:
             seen_questions.add(question)
             order.append(question)
-        if isinstance(record.get("evaluation"), dict):
+        if is_scored_record(record):
             by_question[question] = record
     return [by_question[question] for question in order if question in by_question]
 
