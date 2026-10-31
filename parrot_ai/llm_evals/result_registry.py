@@ -70,7 +70,10 @@ def validate_result_source(source: ResultSource) -> None:
     if not source.path.exists():
         raise FileNotFoundError(f"Completed evaluation result not found: {source.path}")
     records = load_jsonl(source.path)
-    if not any(isinstance(record.get("evaluation"), dict) for record in records):
+    if not any(
+        isinstance(record.get("evaluation"), dict) and record["evaluation"]
+        for record in records
+    ):
         raise ValueError(
             f"Completed evaluation result has no valid score records: {source.path}"
         )

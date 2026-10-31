@@ -310,6 +310,11 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help="Do not update the legacy transposed comparison CSV",
     )
     p.add_argument(
+        "--require-complete-answers",
+        action="store_true",
+        help="Fail before judging if any selected question has a missing or blank answer",
+    )
+    p.add_argument(
         "--results-jsonl",
         help="Override results JSONL filename (auto directory based on mode & language if relative)",
     )
@@ -549,7 +554,7 @@ def main(argv: List[str]) -> int:
         for q, a in raw_pairs:
             if q not in q_to_a:
                 q_to_a[q] = a
-        missing_questions = [q for q in eval_questions if q not in q_to_a]
+        missing_questions = [q for q in eval_questions if not q_to_a.get(q, "").strip()]
         if missing_questions:
             print(
                 f"[retry] {len(missing_questions)} missing answers detected, retrying generation..."
@@ -641,6 +646,18 @@ def main(argv: List[str]) -> int:
                 f"[load] Filtered {len(pairs)} evaluation pairs from dataset (strict 100-question set)."
             )
 
+    if not pairs:
+        print("[failed] No question/answer pairs available for evaluation.")
+        return 1
+    if args.require_complete_answers:
+        missing_answers = sum(not answer.strip() for _, answer in pairs)
+        if missing_answers:
+            print(
+                f"[failed] {missing_answers}/{len(pairs)} answers are missing or blank. "
+                "Repair or resume answer generation before judging; no judge calls made."
+            )
+            return 1
+
     # Results JSONL placement (mode dependent) -- resolve path BEFORE evaluation
     if args.mode in ("dataset", "extended"):
         default_results_dir = training_evals_dir
@@ -676,7 +693,7 @@ def main(argv: List[str]) -> int:
                 ev = obj.get("evaluation")
                 answer = obj.get("answer", "")
                 # Keep result if it has a valid evaluation and the answer wasn't empty
-                if q and ev and answer:
+                if q and isinstance(ev, dict) and ev and answer.strip():
                     existing_results[q] = obj
         print(f"[eval] Found {len(existing_results)} existing evaluations in {results_jsonl}")
 
@@ -708,6 +725,11 @@ def main(argv: List[str]) -> int:
             # Should not happen, but fail gracefully
             results.append({"question": q, "answer": a, "error": "no evaluation"})
 
+    failed_count = sum(
+        not isinstance(result.get("evaluation"), dict) or not result["evaluation"]
+        for result in results
+    )
+
     # Load question tags for selective scoring (English only)
     question_tags: Optional[Dict[str, dict]] = None
     if args.question_tags:
@@ -732,7 +754,9 @@ def main(argv: List[str]) -> int:
         print(f"  {k}: {aggregated[k]}")
 
     # Update the legacy transposed comparison CSV unless the batch workflow opts out.
-    if args.skip_comparison_csv:
+    if failed_count:
+        print("[csv] Skipped comparison CSV update because evaluation is incomplete.")
+    elif args.skip_comparison_csv:
         print("[csv] Skipped legacy comparison CSV update.")
     else:
         rows_order = build_rows_order(include_arabic_accuracy)
@@ -752,7 +776,7 @@ def main(argv: List[str]) -> int:
             meta_values=csv_meta_values,
         )
 
-    # Write full results JSONL (overwrite with clean merged set)
+    # Append attempted results, including errors, so successful work is resumable.
     meta = {
         "dataset": str(dataset_path),
         "answers_label": answers_label,
@@ -772,6 +796,12 @@ def main(argv: List[str]) -> int:
         append_results_jsonl(results_jsonl, new_results, meta)
     else:
         print(f"[results] No new results to append to {results_jsonl}")
+    if failed_count:
+        print(
+            f"[failed] {failed_count}/{len(pairs)} evaluations failed or were not attempted. "
+            "Successful scores were preserved; rerun to retry unfinished questions."
+        )
+        return 1
     print("[done] Completed.")
     return 0
 

@@ -1,11 +1,13 @@
 """Tests for manifest-driven benchmark command construction."""
 
+import json
 import threading
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import cp_eval_benchmark as benchmark
 from cp_eval_benchmark import cross_judge_commands, generation_commands, run_benchmark
 from parrot_ai.llm_evals.benchmark_config import (
     expected_dynamic_sources,
@@ -15,6 +17,51 @@ from parrot_ai.llm_evals.benchmark_config import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = REPO_ROOT / "benchmark_configs/english_api_v1_4.json"
+
+
+@pytest.fixture(autouse=True)
+def isolated_manifest(tmp_path, monkeypatch):
+    """Exercise a fixed plan without depending on the user's active benchmark."""
+    path = tmp_path / "config.json"
+    payload = {
+        "system_prompt_label": "v1_4",
+        "api_evals_dir": str(tmp_path / "results"),
+        "result_registry": str(tmp_path / "english_api_registry.json"),
+        "master_csv": str(tmp_path / "master.csv"),
+        "question_tags": str(tmp_path / "tags.json"),
+        "models": [
+            {"provider": "xai", "model": "grok-4.5"},
+            {"provider": "openai", "model": "gpt-5.6-luna", "judge_contender": True},
+        ],
+        "provider_leaders": [
+            {
+                "provider": provider,
+                "model": model,
+                "answers_label": f"{provider}-{model}-v1_4",
+                "dataset": str(tmp_path / f"{model}.jsonl"),
+            }
+            for provider, model in [
+                ("openai", "gpt-5-mini"),
+                ("google", "gemini-3-flash"),
+                ("anthropic", "claude-haiku-4-5"),
+                ("xai", "grok-4.5"),
+            ]
+        ],
+    }
+    path.write_text(json.dumps(payload))
+    monkeypatch.setattr(__name__ + ".CONFIG_PATH", path)
+    return path
+
+
+def _write_operation_result(command, *, error=False):
+    path = Path(command[command.index("--results-jsonl") + 1])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"question": "Question", "answer": "Answer"}
+    if error:
+        record["error"] = "SDK failure"
+    else:
+        record["evaluation"] = {"Adherence": {"Core": 4}}
+    path.write_text(json.dumps(record) + "\n")
 
 
 def _unique_answer_set_counts(config) -> tuple[int, int]:
@@ -43,6 +90,7 @@ def test_manifest_builds_generation_and_deduplicated_cross_judge_commands():
     ]
     assert all("--skip-comparison-csv" in command for command in generation)
     assert all("--skip-comparison-csv" in command for command in cross_judge)
+    assert all("--require-complete-answers" in command for command in generation + cross_judge)
     assert all("gpt-5.6-luna" in command for command in cross_judge)
     assert len(expected_dynamic_sources(config)) == len(generation) + len(
         cross_judge
@@ -178,6 +226,7 @@ def test_single_contender_uses_available_worker_slots_and_waits_for_generation()
                 self_judging_started_after_generation.append(
                     generation_finished.is_set()
                 )
+            _write_operation_result(command)
             return 0
         finally:
             with lock:
@@ -234,6 +283,8 @@ def test_failed_generation_skips_only_its_dependent_contender_evaluation():
         mode = command[command.index("--mode") + 1]
         answers_label = command[command.index("--answers-label") + 1]
         called_labels.append(answers_label)
+        if mode != "generate-api_evals":
+            _write_operation_result(command)
         return 1 if mode == "generate-api_evals" else 0
 
     with pytest.raises(RuntimeError, match="1 failed and 1 dependency-skipped"):
@@ -248,3 +299,46 @@ def test_failed_generation_skips_only_its_dependent_contender_evaluation():
 
     assert called_labels.count(contender.answers_label) == 1
     assert len(called_labels) == 5
+
+
+def test_zero_exit_with_error_only_file_is_failed_and_blocks_dependents(capsys):
+    config = load_benchmark_config(CONFIG_PATH, REPO_ROOT)
+    contender = config.judge_contenders[0]
+    config = replace(config, generation_targets=(contender,), control_targets=())
+    calls = []
+
+    def false_success(command):
+        calls.append(command)
+        _write_operation_result(command, error=True)
+        return 0
+
+    with pytest.raises(benchmark.BenchmarkRunError, match="1 failed and 1 dependency-skipped") as exc:
+        run_benchmark(config, phase="all", dry_run=False, run_evaluation=false_success)
+
+    assert len(calls) == 1
+    assert exc.value.completed_sources == []
+    assert "no valid score records" in capsys.readouterr().out
+
+
+def test_failed_round_registers_successful_operations_and_returns_failure(monkeypatch, tmp_path):
+    config = load_benchmark_config(CONFIG_PATH, REPO_ROOT)
+    good, bad = generation_commands(config)
+    _write_operation_result(good)
+    _write_operation_result(bad, error=True)
+
+    def run_round(*args, **kwargs):
+        return run_benchmark(
+            config, phase="generate", dry_run=False,
+            run_evaluation=lambda command: 1 if command == bad else 0,
+        )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(benchmark, "run_benchmark", run_round)
+    # Keep the actual runner available inside the replacement above.
+    status = benchmark.main(["--config", str(CONFIG_PATH), "--phase", "generate"])
+
+    assert status == 1
+    registry = json.loads(config.result_registry.read_text())
+    assert len(registry["results"]) == 1
+    assert registry["results"][0]["path"].endswith(Path(good[good.index("--results-jsonl") + 1]).name)
+    assert config.master_csv.exists()

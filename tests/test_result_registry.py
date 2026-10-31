@@ -95,3 +95,12 @@ def test_default_registry_retains_seeded_runs_and_valid_unique_paths():
     assert len(sources) >= 25
     assert len({source.path for source in sources}) == len(sources)
     assert all(source.path.exists() for source in sources)
+
+
+def test_empty_evaluation_object_cannot_be_registered(tmp_path):
+    results = tmp_path / "empty-scores.jsonl"
+    results.write_text(json.dumps({"question": "Question", "answer": "Answer", "evaluation": {}}) + "\n")
+    registry = tmp_path / "registry.json"
+    with pytest.raises(ValueError, match="no valid score records"):
+        append_result_sources(registry, [ResultSource(results)], repo_root=tmp_path)
+    assert not registry.exists()

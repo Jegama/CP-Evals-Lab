@@ -714,12 +714,11 @@ class ParrotAIClaude(BaseParrotAI):
         response_model: Any,
         model: Optional[str] = None,
         max_tokens: int = 4096,
-        temperature: float = 0.0,
     ) -> dict:
         """Call messages.parse with a Pydantic response_model and return dict.
 
         Uses Anthropic's structured outputs feature via the .parse() method.
-        Temperature defaults to 0 for deterministic outputs.
+        Sampling parameters are omitted for Anthropic SDK v1 compatibility.
         """
         model_to_use = model or self.model_name or "claude-haiku-4-5-20251001"
 
@@ -729,7 +728,6 @@ class ParrotAIClaude(BaseParrotAI):
             max_tokens=max_tokens,
             messages=messages,
             output_format=response_model,
-            temperature=temperature,
         )
 
         # Get parsed output and convert to dict

@@ -56,6 +56,15 @@ load_dotenv()
 DEFAULT_MODEL = "gpt-5-mini"
 
 
+def _stop_after_error(error: Exception, consecutive_errors: int) -> bool:
+    """Stop broken SDK/configuration calls immediately, other failures after three."""
+    return (
+        isinstance(error, (TypeError, AttributeError))
+        or getattr(error, "status_code", None) in (400, 401, 403, 404, 422)
+        or consecutive_errors >= 3
+    )
+
+
 class EvaluationEngine:
     """Encapsulates evaluation logic for reuse in notebooks or scripts.
 
@@ -215,7 +224,6 @@ class EvaluationEngine:
                 "max_tokens": 4096,
                 "messages": messages,
                 "output_format": response_model,
-                "temperature": 0.0,
             }
             if self.system_prompt:
                 parse_kwargs["system"] = self.system_prompt
@@ -276,6 +284,9 @@ class EvaluationEngine:
             limit: Optional limit on the number of pairs to evaluate.
             progress: Whether to show a progress bar.
             stop_on_error: Whether to stop evaluation on the first error.
+
+        Otherwise, retain attempted results and stop on a permanent error or
+        three consecutive failures so callers can save and resume partial work.
         """
         out: list[dict] = []
         processed = 0
@@ -297,18 +308,27 @@ class EvaluationEngine:
             except Exception:  # noqa: BLE001
                 bar = None
         emit_progress("judging", 0, total)
+        consecutive_errors = 0
         for i, (q, a) in enumerate(pairs):
             if limit is not None and processed >= limit:
                 break
             try:
                 res = self.evaluate(q, a)
+                if not isinstance(res, dict) or not res:
+                    raise ValueError("Judge returned no evaluation scores")
                 out.append({"index": i, "question": q, "answer": a, "evaluation": res})
+                consecutive_errors = 0
             except Exception as e:  # noqa: BLE001
                 if stop_on_error:
                     if bar:
                         bar.close()
                     raise
                 out.append({"index": i, "question": q, "error": str(e)})
+                consecutive_errors += 1
+                tqdm.write(f"[error] Evaluation {i + 1}: {e}")
+                if _stop_after_error(e, consecutive_errors):
+                    tqdm.write("[failed] Stopping judge batch; returning attempted results for resume.")
+                    break
             processed += 1
             if bar:
                 bar.update(1)
@@ -422,9 +442,12 @@ class EvaluationEngine:
                 bar = None
 
         emit_progress("generating", 0, len(questions))
+        consecutive_errors = 0
         for i, q in enumerate(questions):
             try:
                 answer = wrapper.generate(prompt=q, model=use_model, system=system)
+                if not isinstance(answer, str) or not answer.strip():
+                    raise ValueError("Provider returned an empty answer")
                 out.append(
                     {
                         "index": i,
@@ -435,6 +458,7 @@ class EvaluationEngine:
                         "system_used": bool(system),
                     }
                 )
+                consecutive_errors = 0
             except Exception as e:
                 out.append(
                     {
@@ -446,6 +470,11 @@ class EvaluationEngine:
                         "system_used": bool(system),
                     }
                 )
+                consecutive_errors += 1
+                tqdm.write(f"[error] Generation {i + 1}: {e}")
+                if _stop_after_error(e, consecutive_errors):
+                    tqdm.write("[failed] Stopping generation batch; returning attempted answers for resume.")
+                    break
 
             if bar:
                 bar.update(1)
