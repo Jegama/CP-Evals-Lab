@@ -102,7 +102,11 @@ class EvaluationEngine:
         if model == DEFAULT_MODEL:
             self.client = client or OpenAI()
         elif model.startswith("gemini"):
-            self.client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+            # Use the stable API consistently for judging and generation.
+            self.client = genai.Client(
+                api_key=os.environ.get("GEMINI_API_KEY"),
+                http_options=types.HttpOptions(api_version="v1"),
+            )
         elif model.startswith("claude"):
             self.client = anthropic.Anthropic()
         else:
@@ -422,9 +426,9 @@ class EvaluationEngine:
         # Default models per provider
         default_models = {
             "openai": "gpt-5-mini",
-            "together": "google/gemma-3-27b-it",
+            "together": "Qwen/Qwen3.5-9B",
             "hf": "google/gemma-3-27b-it",
-            "google": "gemini-3-flash",
+            "google": "gemini-3.8-flash",
             "xai": "grok-3-mini",
             "anthropic": "claude-haiku-4-5-20251001",
         }

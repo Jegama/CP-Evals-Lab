@@ -2,12 +2,12 @@
 
 Usage examples:
   # Single-run evaluation
-  python cp_eval_sermons.py --model gemini-3-flash-preview \
+  python cp_eval_sermons.py --model gemini-3.8-flash \
         --audio data/sermons/Ephesians_4_7-16.mp3 --out-dir data/sermons_evals \
         --label eph4_7-16 --preacher "Josh" --markdown
 
   # Multi-run evaluation with self-consistency (3 parallel runs)
-  python cp_eval_sermons.py --model gemini-3-flash-preview --num-scoring-runs 3 \
+  python cp_eval_sermons.py --model gemini-3.8-flash --num-scoring-runs 3 \
         --audio data/sermons/Ephesians_4_7-16.mp3 --out-dir data/sermons_evals \
         --label eph4_7-16_multi --preacher "Josh" --markdown
 
@@ -36,8 +36,8 @@ def parse_args(argv=None):
     )
     p.add_argument(
         "--model",
-        default="gemini-3-flash-preview",
-        help="Gemini model to use for evaluation (default: gemini-3-flash-preview)",
+        default="gemini-3.8-flash",
+        help="Gemini model to use for evaluation (default: gemini-3.8-flash)",
     )
     p.add_argument(
         "--out-dir",

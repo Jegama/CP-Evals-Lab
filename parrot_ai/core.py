@@ -406,7 +406,7 @@ class ParrotAITogether(BaseParrotAI):
         model: Optional[str] = None,
         **kwargs,
     ) -> str:
-        model_to_use = model or self.model_name or "google/gemma-3-12b-it"
+        model_to_use = model or self.model_name or "Qwen/Qwen3.5-9B"
         messages = self._build_messages(prompt, system)
 
         completion = self._client.chat.completions.create(
@@ -449,7 +449,11 @@ class ParrotAIGemini(BaseParrotAI):
         if not os.environ.get("GEMINI_API_KEY"):
             raise ValueError("GEMINI_API_KEY must be set in environment variables")
 
-        self._client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        # Pin the stable API explicitly so environment settings cannot change it.
+        self._client = genai.Client(
+            api_key=os.environ.get("GEMINI_API_KEY"),
+            http_options=types.HttpOptions(api_version="v1"),
+        )
         self._types = types
         print("Gemini client initialized")
 
@@ -460,7 +464,7 @@ class ParrotAIGemini(BaseParrotAI):
         model: Optional[str] = None,
         **kwargs,
     ) -> str:
-        model_to_use = model or self.model_name or "gemini-3-flash"
+        model_to_use = model or self.model_name or "gemini-3.8-flash"
 
         # Only apply system prompt if explicitly supplied
         if system is not None:
@@ -501,7 +505,7 @@ class ParrotAIGemini(BaseParrotAI):
         **kwargs,
     ) -> str:
         """Generate using raw contents list (e.g., [instruction, file])."""
-        model_to_use = model or self.model_name or "gemini-3-flash"
+        model_to_use = model or self.model_name or "gemini-3.8-flash"
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:
@@ -534,7 +538,7 @@ class ParrotAIGemini(BaseParrotAI):
         model: Optional[str] = None,
         seed: Optional[int] = 1689,
     ) -> dict:
-        model_to_use = model or self.model_name or "gemini-3-flash"
+        model_to_use = model or self.model_name or "gemini-3.8-flash"
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:
@@ -568,7 +572,7 @@ class ParrotAIGemini(BaseParrotAI):
         model: Optional[str] = None,
         seed: Optional[int] = 1689,
     ) -> dict:
-        model_to_use = model or self.model_name or "gemini-3-flash"
+        model_to_use = model or self.model_name or "gemini-3.8-flash"
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:
