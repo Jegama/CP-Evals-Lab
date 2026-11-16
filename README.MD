@@ -323,7 +323,11 @@ The default manifest is `benchmark_configs/english_api_v1_4.json`. For a future 
 
 ```json
 {
-  "default_judge_model": "gpt-5-mini",
+  "default_judge_models": [
+    "gpt-6-luna",
+    "gemini-4-hydrogen",
+    "claude-haiku-5-5"
+  ],
   "max_parallel_operations": 4,
   "result_registry": "benchmark_configs/english_api_registry.json",
   "models": [
@@ -338,11 +342,13 @@ The default manifest is `benchmark_configs/english_api_v1_4.json`. For a future 
 }
 ```
 
-Every listed model generates a fresh answer set and is scored by `default_judge_model`. An `answers_label` is derived automatically as `{provider}-{model}-{system_prompt_label}`; specify `answers_label` on a model only when an override is needed.
+Every listed model generates one answer set (or resumes its saved set) and is scored independently by every model in `default_judge_models`. Changing a dashboard judge panel requires a new scoring edition while retaining historical editions. The runner stores separate results for each judge; panel weighting and scoring editions remain dashboard concerns. An `answers_label` is derived automatically as `{provider}-{model}-{system_prompt_label}`; specify `answers_label` on a model only when an override is needed.
 
-Models marked `judge_contender` are also used as judges. Each contender scores the deduplicated union of every new answer set and the configured `provider_leaders`. With multiple contenders, each one runs that complete comparison independently. If a contender has the same model ID as the default judge, already-completed default-judge evaluations are not repeated.
+`default_judge_models` must be a non-empty list of distinct model IDs. Older manifests using a scalar `default_judge_model` or `initial_judge_model` still work; a list under the singular key is also accepted. Specify only one of these fields. Other manifests may use a different panel size; the runner does not infer or automatically replace a family's judge.
 
-`max_parallel_operations` is a concurrency ceiling, not a fixed batch size. The dependency-aware scheduler starts up to that many ready operations, gives generation work priority, uses provider-leader evaluations to fill otherwise unused slots, and unlocks each new-model contender evaluation as soon as that model's generated dataset is complete. Override the manifest for one run with `--jobs`; use `--jobs 1` for fully sequential execution.
+Models marked `judge_contender` are also used as judges. Each contender scores the deduplicated union of every new answer set and the configured `provider_leaders`. With multiple contenders, each one runs that complete comparison independently. If a contender matches any default panel member, new-answer evaluations already assigned to the panel are not repeated. Provider leaders are saved answer sets for contender comparisons; listing a model there does not make it a judge. Contender status never promotes a model into the default panel.
+
+`max_parallel_operations` is a concurrency ceiling, not a fixed batch size. The dependency-aware scheduler starts up to that many ready operations, gives generation work priority, and uses provider-leader evaluations to fill otherwise unused slots. Generation runs in its own subprocess with `--generate-only`, without initializing any judge client. Every panel and contender judge waits until every canonical question has a validated answer, then reads that same saved dataset in its own subprocess. A judge failure never blocks another judge. Override the manifest for one run with `--jobs`; use `--jobs 1` for fully sequential execution.
 
 `result_registry` is the canonical append-only list of runs included in the master CSV. It is seeded with the original 25 dashboard runs. After the selected benchmark operations finish, successful operations' validated result files are appended atomically in deterministic plan order, even when other operations fail; existing paths are deduplicated. Changing the active `models` list therefore never removes earlier master rows. `provider_leaders` remains manually maintained and is never changed automatically.
 
@@ -356,9 +362,13 @@ The current manifest defines:
 - Provider leaders: GPT-5 Mini, GPT-5.6 Luna, GPT-6 Luna, Gemini 3 Flash, Gemini 3.5 Flash, Gemini 3.8 Flash, Claude Haiku 4.5, Claude Haiku 5.5, Grok 4.3, and Grok 4.5.
 - English's full 500-question set (`limit: 0`).
 
-Each operation runs in an isolated Python subprocess and writes to its own file under `data/english/api_evals/logs/`, so parallel output does not become interleaved. The parent runner shows one live tqdm bar per active worker, switching each bar from generation to judging as the operation advances; pass `--no-live-progress` to suppress them. Existing generated datasets and per-question judge results are reused, so rerunning the command resumes missing work instead of restarting the round. A failed generation skips only contender evaluations that depend on its dataset; independent work is allowed to finish. Successful operations still reach the registry and master CSV, while the round exits with failure if any operation failed or was dependency-skipped.
+Each operation runs in an isolated Python subprocess and writes to its own file under `data/english/api_evals/logs/`, so parallel output does not become interleaved. The parent runner shows one live tqdm bar per active worker, identifying the generator or the judge and answer set; pass `--no-live-progress` to suppress them. Failures explicitly identify `generation` or `judging`. Existing dataset and result filenames are retained, including the former first judge's results, so rerunning the same command reuses saved answers and matching valid reviews. Only unresolved answer generation blocks that answer set's judges; independent work is allowed to finish. Successful judging operations still reach the registry and master CSV, while the round exits with failure if any operation failed or was dependency-skipped. `--phase generate` still includes the full default judge panel; `--generate-only` is an option of the underlying `cp_eval_llms.py` CLI.
 
 Benchmark operations always pass `--require-complete-answers`: missing, blank, or explicitly error-marked source answers block judging before any judge requests. Standalone `cp_eval_llms.py` callers can opt into the same guard; without it, missing answers retain the existing local minimum-score penalty, which does not call a judge. Generation and judging stop immediately on SDK signature errors or permanent HTTP request failures (400, 401, 403, 404, 422), and after three consecutive other failures. The provider SDK may perform its own retries within each attempt. When generation hits this cutoff, the CLI saves successful answers and exits with failure before any further generation or judging; a later invocation resumes missing answers. Attempted evaluation results are preserved, and incomplete evaluation exits with failure. Accepting, reusing, and publishing evaluations requires at least one integer score in a recognized rubric field; empty sections and metadata alone do not count as scores, and error-marked records are excluded.
+
+Synchronous Gemini generation and judging use a 120-second request timeout and up to five SDK attempts for timeouts, connection errors, and retryable HTTP responses, with exponential backoff from 5 seconds capped at 30 seconds (plus jitter within that cap). Set `CP_GEMINI_TIMEOUT_SECONDS` and `CP_GEMINI_MAX_ATTEMPTS` to positive integers to override those defaults. Permanent authentication/request errors are not retried.
+
+The CLI appends and flushes each generated answer and attempted review to disk before issuing the next request, so interruption preserves completed work. Resuming checks saved reviews against the current answer text, shows saved and remaining counts, and starts progress at the saved count (for example, `246/500`, with `246 reused, 254 remaining`). Fully saved stages show `500/500` with zero remaining requests. During judging, every progress label names the judge and answer model, including the first judge in a combined generation/judging operation. Work from older interrupted runs that never reached disk cannot be reconstructed from progress counters.
 
 Run one phase explicitly or override concurrency when useful:
 
@@ -369,6 +379,15 @@ python cp_eval_benchmark.py --phase generate
 python cp_eval_benchmark.py --phase cross-judge
 python cp_eval_benchmark.py --phase master
 ```
+
+`--phase generate` generates/resumes the selected answer sets and scores them with the entire default panel, without contender comparisons. `--phase cross-judge` runs only contender comparisons against saved answer sets. `--phase all` does both, deduplicating answer-set/judge pairs. With the current manifest, the plan has 4 generation operations, 12 panel operations, and 28 contender operations (each contender judges the 4 active answer sets and 10 controls). These 44 operations are not 44 API calls: each judge operation covers up to 500 questions, reusing valid saved scores.
+
+Useful workflows:
+
+- **Evaluate a new answer model:** add it to `models`, leave `judge_contender` false or omitted, and keep the panel fixed so comparisons use the same judges.
+- **Evaluate a potential judge replacement:** mark it as a contender, compare its judgments on the saved controls, and review disagreements through the calibration lab. Change the panel explicitly only after that assessment, and create a new dashboard scoring edition when judges change.
+- **Compare system prompts:** use a separate manifest with a new `system_prompt_label` and distinct answer labels while keeping the same panel. Preserve old datasets to compare both prompts under identical judges.
+- **Fill missing judge coverage:** select an existing answer model with its exact original `answers_label`, provider, and prompt label, and run `--phase generate`. Saved answers and completed judge results are reused; missing panel judgments are added. Never reuse a label for different answer content.
 
 Every completed phase registers its result files and rebuilds `data/english/api_evals_master.csv` from the full registry. To rebuild the master retrospectively without calling a provider:
 

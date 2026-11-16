@@ -26,6 +26,7 @@ from parrot_ai.llm_evals.benchmark_config import (
 from parrot_ai.llm_evals.master_csv import ResultSource
 from parrot_ai.llm_evals.progress_reporting import PROGRESS_FILE_ENV
 from parrot_ai.llm_evals.result_registry import append_result_sources, validate_result_source
+from parrot_ai.llm_evals.data_loading import load_eval_questions, load_qa_pairs
 
 
 RunEvaluation = Callable[[list[str]], int]
@@ -48,8 +49,15 @@ class BenchmarkOperation:
     description: str
     progress_label: str
     command: tuple[str, ...]
-    result_path: Path
+    result_path: Path | None
     dependencies: tuple[str, ...] = ()
+
+    @property
+    def stage(self) -> str:
+        return "generation" if self.phase == "generate" else "judging"
+
+    def stage_label(self, stage: str) -> str:
+        return self.progress_label
 
 
 def _positive_int(value: str) -> int:
@@ -62,7 +70,7 @@ def _positive_int(value: str) -> int:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate answer sets, score them with the default judge, run any "
+            "Generate answer sets, score them with the default judge panel, run any "
             "contender judging through a dependency-aware worker queue, and "
             "rebuild the master CSV."
         )
@@ -72,7 +80,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--phase",
         choices=["all", "generate", "cross-judge", "master"],
         default="all",
-        help="Run the full workflow or one resumable phase (default: all)",
+        help=(
+            "Run the full workflow or one resumable phase: generate includes all "
+            "default panel judges; cross-judge runs contender evaluations (default: all)"
+        ),
     )
     parser.add_argument(
         "--jobs",
@@ -101,7 +112,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def _common_args(config: BenchmarkConfig) -> list[str]:
-    return [
+    args = [
         "--language",
         config.language,
         "--system-prompt-label",
@@ -113,20 +124,49 @@ def _common_args(config: BenchmarkConfig) -> list[str]:
         "--skip-comparison-csv",
         "--require-complete-answers",
     ]
+    return args
 
 
 def _generation_operation_id(answers_label: str) -> str:
     return f"generate:{answers_label}"
 
 
+def _dataset_judge_operation(
+    config: BenchmarkConfig,
+    *,
+    answers_label: str,
+    dataset: Path,
+    judge_model: str,
+    phase: str,
+    target_kind: str,
+) -> BenchmarkOperation:
+    result_path = results_path(config, answers_label, judge_model).resolve()
+    return BenchmarkOperation(
+        operation_id=f"judge:{judge_model}:{answers_label}",
+        phase=phase,
+        target_kind=target_kind,
+        priority=1 if target_kind == "provider leader" else 2,
+        description=f"{judge_model} judges {answers_label} ({target_kind})",
+        progress_label=f"{judge_model} -> {answers_label}",
+        command=(
+            "--mode", "dataset",
+            "--dataset", str(dataset.resolve()),
+            "--answers-label", answers_label,
+            "--judge-model", judge_model,
+            "--results-jsonl", str(result_path),
+            *_common_args(config),
+        ),
+        result_path=result_path,
+        dependencies=(
+            (_generation_operation_id(answers_label),)
+            if target_kind == "new model" else ()
+        ),
+    )
+
+
 def generation_operations(config: BenchmarkConfig) -> list[BenchmarkOperation]:
     operations: list[BenchmarkOperation] = []
     for target in config.generation_targets:
-        result_path = results_path(
-            config,
-            target.answers_label,
-            config.default_judge_model,
-        ).resolve()
         command = [
             "--mode",
             "generate-api_evals",
@@ -136,12 +176,9 @@ def generation_operations(config: BenchmarkConfig) -> list[BenchmarkOperation]:
             target.gen_model,
             "--answers-label",
             target.answers_label,
-            "--judge-model",
-            config.default_judge_model,
+            "--generate-only",
             "--output-dataset",
             str(generated_dataset_path(config, target).resolve()),
-            "--results-jsonl",
-            str(result_path),
             *_common_args(config),
         ]
         if config.use_system_prompt:
@@ -155,13 +192,24 @@ def generation_operations(config: BenchmarkConfig) -> list[BenchmarkOperation]:
                 priority=0,
                 description=(
                     f"{target.provider}:{target.gen_model}{marker} -> "
-                    f"generate answers and judge with {config.default_judge_model}"
+                    "generate answers"
                 ),
                 progress_label=f"{target.provider}:{target.gen_model}",
                 command=tuple(command),
-                result_path=result_path,
+                result_path=None,
             )
         )
+        for judge_model in config.default_judge_models:
+            operations.append(
+                _dataset_judge_operation(
+                    config,
+                    answers_label=target.answers_label,
+                    dataset=generated_dataset_path(config, target),
+                    judge_model=judge_model,
+                    phase="panel",
+                    target_kind="new model",
+                )
+            )
     return operations
 
 
@@ -188,8 +236,9 @@ def cross_judge_operations(config: BenchmarkConfig) -> list[BenchmarkOperation]:
     )
 
     completed_pairs = {
-        (target.answers_label, config.default_judge_model)
+        (target.answers_label, judge_model)
         for target in config.generation_targets
+        for judge_model in config.default_judge_models
     }
     operations: list[BenchmarkOperation] = []
     for contender in config.judge_contenders:
@@ -199,42 +248,14 @@ def cross_judge_operations(config: BenchmarkConfig) -> list[BenchmarkOperation]:
             if pair in completed_pairs:
                 continue
             completed_pairs.add(pair)
-            dependencies = (
-                (_generation_operation_id(answers_label),)
-                if target_kind == "new model"
-                else ()
-            )
-            result_path = results_path(
-                config,
-                answers_label,
-                judge_model,
-            ).resolve()
-            command = [
-                "--mode",
-                "dataset",
-                "--dataset",
-                str(dataset.resolve()),
-                "--answers-label",
-                answers_label,
-                "--judge-model",
-                judge_model,
-                "--results-jsonl",
-                str(result_path),
-                *_common_args(config),
-            ]
             operations.append(
-                BenchmarkOperation(
-                    operation_id=f"judge:{judge_model}:{answers_label}",
+                _dataset_judge_operation(
+                    config,
+                    answers_label=answers_label,
+                    dataset=dataset,
+                    judge_model=judge_model,
                     phase="contender",
                     target_kind=target_kind,
-                    priority=1 if target_kind == "provider leader" else 2,
-                    description=(
-                        f"{judge_model} judges {answers_label} ({target_kind})"
-                    ),
-                    progress_label=f"{judge_model} -> {answers_label}",
-                    command=tuple(command),
-                    result_path=result_path,
-                    dependencies=dependencies,
                 )
             )
     return operations
@@ -336,14 +357,16 @@ def print_benchmark_plan(
     jobs: int,
     show_commands: bool,
 ) -> None:
-    generation = generation_operations(config)
     contender = cross_judge_operations(config)
     operations = selected_operations(config, phase)
 
     print("Benchmark plan")
     print(f"  Maximum concurrent operations: {jobs}")
     print("  Scheduling: dependency-aware; jobs is a ceiling, not a batch size")
-    print(f"  Default judge: {config.default_judge_model}")
+    print(f"  Default judge panel ({len(config.default_judge_models)}):")
+    for judge_model in config.default_judge_models:
+        print(f"    - {judge_model}")
+    print("  Judges wait for every question to have a valid answer; each judge runs independently")
     print(f"  System prompt: {config.system_prompt_label}")
     print(f"  New models ({len(config.generation_targets)}):")
     for index, target in enumerate(config.generation_targets, start=1):
@@ -379,10 +402,15 @@ def print_benchmark_plan(
     selected_contender = [
         operation for operation in operations if operation.phase == "contender"
     ]
+    selected_panel = [
+        operation for operation in operations if operation.phase == "panel"
+    ]
     print("  Selected operations:")
-    print(f"    - generation/default judging: {len(selected_generation)}")
+    print(f"    - answer generation: {len(selected_generation)}")
+    print(f"    - panel judging: {len(selected_panel)}")
     print(f"    - contender judging: {len(selected_contender)}")
     print(f"    - total provider evaluation operations: {len(operations)}")
+    print("    - operation counts are not fresh API calls; saved results are reused")
     print(f"    - result registry: {config.result_registry}")
     print(f"    - master CSV: {config.master_csv}")
 
@@ -456,6 +484,7 @@ class _ProgressBarState:
     tail: _ProgressTail
     bar: Any
     stage: str | None = None
+    reused: int = 0
 
 
 class _LiveProgressDisplay:
@@ -512,12 +541,18 @@ class _LiveProgressDisplay:
                     continue
                 if stage != state.stage:
                     state.stage = stage
+                    state.reused = 0
                     state.bar.reset(total=total)
-                    state.bar.set_description_str(
-                        f"{state.operation.progress_label} | {stage}"
-                    )
                 elif state.bar.total != total:
                     state.bar.total = total
+                reused = event.get("reused")
+                if isinstance(reused, int) and reused >= 0:
+                    state.reused = reused
+                label = f"{state.operation.stage_label(stage)} | {stage}"
+                if state.reused:
+                    remaining = f", {max(total - current, 0)} remaining" if total is not None else ""
+                    label += f" ({state.reused} reused{remaining})"
+                state.bar.set_description_str(label)
                 state.bar.n = max(0, current)
                 changed = True
             if changed:
@@ -578,6 +613,32 @@ def _display_path(path: Path, repo_root: Path) -> str:
         return path.resolve().relative_to(repo_root.resolve()).as_posix()
     except ValueError:
         return str(path.resolve())
+
+
+def _validate_operation_output(
+    config: BenchmarkConfig,
+    operation: BenchmarkOperation,
+    *,
+    effective_repo_root: Path,
+) -> None:
+    if operation.phase != "generate":
+        if operation.result_path is None:
+            raise ValueError("Judging operation has no result path")
+        validate_result_source(ResultSource(operation.result_path))
+        return
+
+    prefix = "ar_" if config.language == "arabic" else "en_"
+    questions = load_eval_questions(
+        str(effective_repo_root / "data" / config.language / f"{prefix}eval_questions.txt"),
+        limit=config.limit,
+    )
+    if not questions:
+        raise ValueError("Cannot verify generation: no evaluation questions loaded")
+    dataset = operation.command[operation.command.index("--output-dataset") + 1]
+    answers = dict(load_qa_pairs(dataset, question_list_path=None, limit=0))
+    missing = sum(not answers.get(question, "").strip() for question in questions)
+    if missing:
+        raise ValueError(f"Answer generation incomplete: {missing}/{len(questions)} answers missing")
 
 
 def _execute_operations(
@@ -645,8 +706,9 @@ def _execute_operations(
                         if item in blocked_ids
                     )
                     display.write(
-                        f"[skipped] {operation.description} "
-                        f"(dependency failed: {dependency})"
+                        f"[skipped] judging: {operation.description} "
+                        f"(answer generation failed: {dependency}; "
+                        "saved answers and reviews preserved)"
                     )
 
                 available_slots = len(available_positions)
@@ -704,15 +766,14 @@ def _execute_operations(
                     available_positions.append(position)
                     available_positions.sort()
                     display.finish(operation)
+                    failure_detail = ""
                     try:
                         exit_code = future.result()
                         if exit_code == 0:
-                            validate_result_source(ResultSource(operation.result_path))
+                            _validate_operation_output(config, operation, effective_repo_root=repo_root)
                     except Exception as exc:
                         exit_code = 1
-                        display.write(
-                            f"[failed] {operation.description}: {exc}"
-                        )
+                        failure_detail = f"; {exc}"
                     if exit_code == 0:
                         completed_ids.add(operation.operation_id)
                         finished += 1
@@ -723,8 +784,9 @@ def _execute_operations(
                     else:
                         failed_ids.add(operation.operation_id)
                         display.write(
-                            f"[failed] {operation.description} "
-                            f"(exit code {exit_code})"
+                            f"[failed] {operation.stage}: {operation.description} "
+                            f"(exit code {exit_code}{failure_detail}; "
+                            "saved answers and reviews preserved)"
                         )
     finally:
         display.close()
@@ -737,7 +799,7 @@ def _execute_operations(
             [
                 ResultSource(operation.result_path, config.eval_version)
                 for operation in operations
-                if operation.operation_id in completed_ids
+                if operation.operation_id in completed_ids and operation.result_path is not None
             ],
         )
 
@@ -782,6 +844,7 @@ def run_benchmark(
             eval_version=config.eval_version,
         )
         for operation in operations
+        if operation.result_path is not None
     ]
 
 
@@ -807,8 +870,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         exit_code = 1
     except KeyboardInterrupt:
         print(
-            "\n[interrupted] Benchmark stopped. Rerun the same command to reuse "
-            "previously saved datasets and evaluations."
+            "\n[interrupted] Benchmark stopped. Rerun the same command to resume "
+            "from answers and reviews checkpointed to disk. "
+            "An in-flight request that was not checkpointed may need to run again."
         )
         return 130
     if not args.dry_run and args.phase in (

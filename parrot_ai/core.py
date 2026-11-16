@@ -449,10 +449,12 @@ class ParrotAIGemini(BaseParrotAI):
         if not os.environ.get("GEMINI_API_KEY"):
             raise ValueError("GEMINI_API_KEY must be set in environment variables")
 
-        # Pin the stable API explicitly so environment settings cannot change it.
+        from .gemini_transport import gemini_http_options
+
+        # Bound stalled sockets and retry transient failures on the stable API.
         self._client = genai.Client(
             api_key=os.environ.get("GEMINI_API_KEY"),
-            http_options=types.HttpOptions(api_version="v1"),
+            http_options=gemini_http_options(),
         )
         self._types = types
         print("Gemini client initialized")

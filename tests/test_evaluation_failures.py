@@ -157,6 +157,39 @@ def _cli_fixture(tmp_path, monkeypatch, answers):
     return engine, args, results
 
 
+@pytest.mark.parametrize("judge", ["gpt-6-luna", "gemini-4-hydrogen", "claude-haiku-5-5"])
+@pytest.mark.parametrize("answer", ["a2", ""])
+def test_generate_only_needs_no_judge_and_requires_complete_answers(tmp_path, monkeypatch, judge, answer):
+    monkeypatch.chdir(tmp_path)
+    questions = tmp_path / "questions.txt"
+    questions.write_text("q1\nq2\n")
+    dataset = tmp_path / "answers.jsonl"
+    dataset.write_text(json.dumps({"messages": [
+        {"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"},
+    ]}) + "\n")
+    saved = dataset.read_bytes()
+    forbidden = Mock(side_effect=AssertionError("Generation initialized a judge client"))
+    monkeypatch.setattr(evaluation_module, "OpenAI", forbidden)
+    monkeypatch.setattr(evaluation_module.genai, "Client", forbidden)
+    monkeypatch.setattr(evaluation_module.anthropic, "Anthropic", forbidden)
+    wrapper = Mock()
+    wrapper.generate.return_value = answer
+    monkeypatch.setattr(evaluation_module, "ParrotAIClaude", lambda **kwargs: wrapper)
+    results = tmp_path / "reviews.jsonl"
+    status = cli.main([
+        "--mode", "generate-api_evals", "--generate-only", "--language", "english",
+        "--limit", "0", "--provider", "anthropic", "--gen-model", "claude-haiku-5-5",
+        "--judge-model", judge, "--questions-file", str(questions),
+        "--output-dataset", str(dataset), "--results-jsonl", str(results), "--no-progress",
+    ])
+    assert status == (0 if answer else 1)
+    forbidden.assert_not_called()
+    assert wrapper.generate.call_count == 1
+    assert wrapper.generate.call_args.kwargs["prompt"] == "q2"
+    assert dataset.read_bytes().startswith(saved)
+    assert not results.exists()
+
+
 @pytest.mark.parametrize("dataset_location", ["absolute", "relative", "external"])
 def test_cli_records_portable_dataset_paths(tmp_path, monkeypatch, dataset_location):
     repo_root = tmp_path / "checkout"
@@ -212,6 +245,148 @@ def test_failed_cli_preserves_successes_and_resume_only_retries_unfinished(tmp_p
     assert [call.args[0] for call in engine.evaluate.call_args_list] == ["q2", "q3"]
     assert path.read_bytes().startswith(before)
     assert len(path.read_text().splitlines()) == 4
+
+
+def test_interrupted_judging_checkpoints_before_next_request_and_resumes(tmp_path, monkeypatch):
+    engine, args, path = _cli_fixture(tmp_path, monkeypatch, {"q1": "a1", "q2": "a2", "q3": "a3"})
+    score = {"Adherence": {"Core": 4}}
+
+    def interrupted(question, answer):
+        if question == "q2":
+            saved = [json.loads(line) for line in path.read_text().splitlines()]
+            assert len(saved) == 1 and saved[0]["question"] == "q1"
+            assert saved[0]["judge_model"] and saved[0]["timestamp"]
+            raise KeyboardInterrupt
+        return score
+
+    engine.evaluate = Mock(side_effect=interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(args)
+    original = path.read_bytes()
+    events = tmp_path / "progress.jsonl"
+    monkeypatch.setenv("CP_EVAL_PROGRESS_FILE", str(events))
+    engine.evaluate = Mock(return_value=score)
+
+    assert cli.main(args) == 0
+    assert [call.args[0] for call in engine.evaluate.call_args_list] == ["q2", "q3"]
+    assert path.read_bytes().startswith(original)
+    assert len(path.read_text().splitlines()) == 3
+    progress = [json.loads(line) for line in events.read_text().splitlines()]
+    assert progress[0] == {"stage": "judging", "current": 1, "total": 3, "reused": 1}
+    assert all(event["current"] >= 1 and event["total"] == 3 for event in progress)
+    assert progress[-1]["current"] == 3
+
+
+def test_fully_reused_reviews_report_completion_without_calls(tmp_path, monkeypatch, capsys):
+    engine, args, path = _cli_fixture(tmp_path, monkeypatch, {"q1": "a1", "q2": "a2", "q3": "a3"})
+    path.write_text("".join(json.dumps({
+        "question": f"q{i}", "answer": f"a{i}", "evaluation": {"Adherence": {"Core": 4}},
+    }) + "\n" for i in range(1, 4)))
+    original = path.read_bytes()
+    events = tmp_path / "progress.jsonl"
+    monkeypatch.setenv("CP_EVAL_PROGRESS_FILE", str(events))
+    engine.evaluate = Mock(side_effect=AssertionError("must reuse scores"))
+
+    assert cli.main(args) == 0
+    engine.evaluate.assert_not_called()
+    assert path.read_bytes() == original
+    assert json.loads(events.read_text()) == {"stage": "judging", "current": 3, "total": 3, "reused": 3}
+    assert "Reviews: 3/3 saved; 0 remaining" in capsys.readouterr().out
+
+
+def test_fully_saved_generation_run_reports_both_stages_complete(tmp_path, monkeypatch):
+    engine, args, path = _cli_fixture(tmp_path, monkeypatch, {"q1": "a1", "q2": "a2", "q3": "a3"})
+    path.write_text("".join(json.dumps({
+        "question": f"q{i}", "answer": f"a{i}", "evaluation": {"Adherence": {"Core": 4}},
+    }) + "\n" for i in range(1, 4)))
+    dataset = tmp_path / "answers.jsonl"
+    original_answers, original_reviews = dataset.read_bytes(), path.read_bytes()
+    engine.evaluate = Mock(side_effect=AssertionError("must reuse reviews"))
+    engine.generate_responses = Mock(side_effect=AssertionError("must reuse answers"))
+    events = tmp_path / "progress.jsonl"
+    monkeypatch.setenv("CP_EVAL_PROGRESS_FILE", str(events))
+    args[args.index("--mode") + 1] = "generate-api_evals"
+    args += ["--provider", "google", "--gen-model", "gemini-4-hydrogen", "--output-dataset", str(dataset)]
+
+    assert cli.main(args) == 0
+    engine.generate_responses.assert_not_called()
+    engine.evaluate.assert_not_called()
+    assert dataset.read_bytes() == original_answers
+    assert path.read_bytes() == original_reviews
+    assert [json.loads(line) for line in events.read_text().splitlines()] == [
+        {"stage": stage, "current": 3, "total": 3, "reused": 3}
+        for stage in ("generating", "judging")
+    ]
+
+
+def test_changed_answer_is_not_counted_as_a_reusable_review(tmp_path, monkeypatch):
+    engine, args, path = _cli_fixture(tmp_path, monkeypatch, {"q1": "a1", "q2": "a2", "q3": "a3"})
+    path.write_text(json.dumps({"question": "q1", "answer": "outdated answer", "evaluation": {"Adherence": {"Core": 4}}}) + "\n")
+    engine.evaluate = Mock(return_value={"Adherence": {"Core": 4}})
+    assert cli.main(args) == 0
+    assert engine.evaluate.call_count == 3
+
+
+@pytest.mark.parametrize("entrypoint", ["judge", "generation"])
+def test_checkpoint_write_failure_stops_before_further_paid_calls(monkeypatch, entrypoint):
+    engine = _engine()
+    request = Mock(return_value={"Adherence": {"Core": 4}} if entrypoint == "judge" else "answer")
+    checkpoint = Mock(side_effect=OSError("disk full"))
+    if entrypoint == "judge":
+        engine.evaluate = request
+        run = lambda: engine.batch_evaluate([("q", "a")] * 10, progress=False, on_result=checkpoint)
+    else:
+        monkeypatch.setattr(evaluation_module, "ParrotAIClaude", lambda **kwargs: Mock(generate=request))
+        run = lambda: engine.generate_responses(["q"] * 10, provider="anthropic", progress=False, on_result=checkpoint)
+    with pytest.raises(OSError, match="disk full"):
+        run()
+    assert request.call_count == 1
+
+
+@pytest.mark.parametrize("existing_answer", [False, True])
+def test_interrupted_generation_saves_initial_and_retry_answers(tmp_path, monkeypatch, existing_answer):
+    engine, _, _ = _cli_fixture(tmp_path, monkeypatch, {})
+    dataset = tmp_path / "generated.jsonl"
+    if existing_answer:
+        dataset.write_text(json.dumps({"messages": [
+            {"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"},
+        ]}) + "\n")
+    wrapper = Mock()
+    wrapper.generate.side_effect = ["a2" if existing_answer else "a1", KeyboardInterrupt()]
+    monkeypatch.setattr(evaluation_module, "ParrotAIClaude", lambda **kwargs: wrapper)
+    args = [
+        "--mode", "generate-api_evals", "--language", "english", "--limit", "0",
+        "--provider", "anthropic", "--gen-model", "claude-haiku-5-5",
+        "--questions-file", str(tmp_path / "questions.txt"), "--output-dataset", str(dataset),
+        "--results-jsonl", str(tmp_path / "scores.jsonl"), "--no-progress",
+        "--require-complete-answers", "--skip-comparison-csv",
+    ]
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(args)
+    saved_count = 2 if existing_answer else 1
+    assert len(dataset.read_text().splitlines()) == saved_count
+    original = dataset.read_bytes()
+    events = tmp_path / "progress.jsonl"
+    monkeypatch.setenv("CP_EVAL_PROGRESS_FILE", str(events))
+    wrapper.generate = Mock(side_effect=lambda prompt, **kwargs: "a" + prompt[1:])
+    engine.evaluate = Mock(return_value={"Adherence": {"Core": 4}})
+
+    assert cli.main(args) == 0
+    assert [call.kwargs["prompt"] for call in wrapper.generate.call_args_list] == [f"q{i}" for i in range(saved_count + 1, 4)]
+    assert dataset.read_bytes().startswith(original)
+    assert len(dataset.read_text().splitlines()) == 3
+    progress = [json.loads(line) for line in events.read_text().splitlines()]
+    assert progress[0] == {"stage": "generating", "current": saved_count, "total": 3, "reused": saved_count}
+    assert all(event["current"] >= saved_count for event in progress if event["stage"] == "generating")
+
+
+def test_checkpoint_preserves_unterminated_jsonl_record(tmp_path):
+    path = tmp_path / "results.jsonl"
+    original = json.dumps({"question": "q1"}).encode()
+    path.write_bytes(original)
+    cli._append_jsonl_record(path, {"question": "q2"})
+    assert path.read_bytes().startswith(original)
+    assert [json.loads(line)["question"] for line in path.read_text().splitlines()] == ["q1", "q2"]
 
 
 def test_cli_all_failed_never_reports_success(tmp_path, monkeypatch, capsys):

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from parrot_ai.core import ParrotAIGemini
 from parrot_ai.evaluation_schemas import EvaluationResultArabic, EvaluationResultEnglish
 from parrot_ai.llm_evaluation import EvaluationEngine
+from parrot_ai.gemini_transport import gemini_http_options
 
 
 class StructuredAnswer(BaseModel):
@@ -33,9 +34,16 @@ def gemini_transport(monkeypatch):
     def handle(request):
         requests.append(request)
         if request.url.path.endswith(":generateContent"):
+            if response.get("failures"):
+                failure = response["failures"].pop(0)
+                if isinstance(failure, Exception):
+                    raise failure
+                return httpx2.Response(failure, json={"error": {
+                    "code": failure, "message": "Offline temporary failure",
+                }})
             return httpx2.Response(200, json={"candidates": [{
                 "content": {"role": "model", "parts": [{"text": response["text"]}]},
-                "finishReason": "STOP",
+                "finishReason": response.get("finish_reason", "STOP"),
             }]})
         if request.url.path.endswith("/files"):
             return httpx2.Response(200, headers={
@@ -49,6 +57,10 @@ def gemini_transport(monkeypatch):
 
     def make_client(**kwargs):
         options = types.HttpOptions.model_validate(kwargs.pop("http_options", {}))
+        if options.retry_options:
+            options.retry_options.initial_delay = 0
+            options.retry_options.max_delay = 0
+            options.retry_options.jitter = 0
         options.client_args = {"transport": httpx2.MockTransport(handle)}
         client = real_client(**kwargs, http_options=options)
         clients.append(client)
@@ -56,6 +68,8 @@ def gemini_transport(monkeypatch):
 
     monkeypatch.setenv("GEMINI_API_KEY", "offline-test-key")
     monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", "httpx2")
+    monkeypatch.delenv("CP_GEMINI_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("CP_GEMINI_MAX_ATTEMPTS", raising=False)
     for name in ("GOOGLE_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GENAI_API_VERSION"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(genai, "Client", make_client)
@@ -131,3 +145,57 @@ def test_files_upload_and_lookup_use_stable_endpoint(gemini_transport, tmp_path)
         "/upload/v1/files", "/offline-upload", "/v1/files/offline-audio",
     ]
     assert requests[1].content == audio.read_bytes()
+
+
+def test_gemini_recovery_defaults_and_overrides(monkeypatch):
+    monkeypatch.delenv("CP_GEMINI_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("CP_GEMINI_MAX_ATTEMPTS", raising=False)
+    options = gemini_http_options()
+    assert options.timeout == 120_000
+    assert options.retry_options.attempts == 5
+    assert options.retry_options.initial_delay == 5
+    assert options.retry_options.max_delay == 30
+    monkeypatch.setenv("CP_GEMINI_TIMEOUT_SECONDS", "240")
+    monkeypatch.setenv("CP_GEMINI_MAX_ATTEMPTS", "3")
+    assert gemini_http_options().timeout == 240_000
+    assert gemini_http_options().retry_options.attempts == 3
+    monkeypatch.setenv("CP_GEMINI_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ValueError, match="positive"):
+        gemini_http_options()
+
+
+@pytest.mark.parametrize("entrypoint", ["generate", "judge"])
+@pytest.mark.parametrize("failure", [httpx2.ReadTimeout("stalled socket"), httpx2.ConnectError("offline"), 503, 429])
+def test_gemini_recovers_same_request_after_network_interruption(gemini_transport, entrypoint, failure):
+    requests, response = gemini_transport
+    response["failures"] = [failure, failure]
+    if entrypoint == "generate":
+        assert ParrotAIGemini(language="english").generate("Question") == "Offline answer"
+    else:
+        schema = EvaluationResultEnglish
+        response["text"] = schema.model_validate({
+            section: {name: 4 for name, field in model.annotation.model_fields.items() if field.is_required()}
+            for section, model in schema.model_fields.items()
+        }).model_dump_json()
+        engine = EvaluationEngine(model="gemini-4-hydrogen", language="english")
+        assert engine.evaluate("What is grace?", "God's favor in Christ.")["Adherence"]["Core"] == 4
+    assert len(requests) == 3
+    assert all(request.content == requests[0].content for request in requests)
+    assert all(request.extensions["timeout"]["read"] == 120 for request in requests)
+
+
+@pytest.mark.parametrize("failure,attempts", [(503, 5), (401, 1), (400, 1)])
+def test_gemini_recovery_is_bounded_and_does_not_retry_permanent_errors(gemini_transport, failure, attempts):
+    requests, response = gemini_transport
+    response["failures"] = [failure] * 10
+    with pytest.raises(Exception):
+        ParrotAIGemini(language="english").generate("Question")
+    assert len(requests) == attempts
+
+
+def test_gemini_socket_timeout_exhaustion_is_bounded(gemini_transport):
+    requests, response = gemini_transport
+    response["failures"] = [httpx2.ReadTimeout("stalled socket")] * 10
+    with pytest.raises(httpx2.ReadTimeout):
+        ParrotAIGemini(language="english").generate("Question")
+    assert len(requests) == 5

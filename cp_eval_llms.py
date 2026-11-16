@@ -41,6 +41,7 @@ import sys
 import random
 import math
 import importlib
+import os
 from datetime import datetime as dt
 from pathlib import Path
 from typing import Dict, List, Tuple, Set, Optional, Sequence
@@ -55,6 +56,7 @@ from parrot_ai.llm_evals import (
 )
 from parrot_ai.llm_evals.master_csv import infer_dataset_metadata
 from parrot_ai.llm_evals.score_validation import is_scored_record
+from parrot_ai.llm_evals.progress_reporting import emit_progress
 
 
 def sanitize_filename(name: str) -> str:
@@ -77,6 +79,44 @@ def _load_system_prompt(engine: EvaluationEngine, use_system_prompt: bool) -> Op
         return None
 
 
+def _append_jsonl_record(path: Path, record: dict) -> None:
+    """Commit one record before the next paid request, preserving prior bytes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as stream:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell():
+            stream.seek(-1, os.SEEK_END)
+            if stream.read(1) != b"\n":
+                stream.write(b"\n")
+        stream.write((json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"))
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _save_generated_answer(
+    path: Path, response: dict, *, gen_model: str,
+    use_system_prompt: bool, system_prompt_label: Optional[str],
+) -> None:
+    if "error" in response:
+        return
+    record = {
+        "messages": [
+            {"role": "user", "content": response["question"]},
+            {"role": "assistant", "content": response["answer"]},
+        ],
+        "gen_model": gen_model,
+        "provider": response.get("provider"),
+        "timestamp": dt.now().astimezone().isoformat(),
+        "use_system_prompt": use_system_prompt,
+    }
+    if system_prompt_label:
+        record["system_prompt_label"] = system_prompt_label
+    _append_jsonl_record(path, record)
+
+
+def _generate_responses(engine, questions, *, artifact, **kwargs):
+    return engine.generate_responses(questions, **kwargs)
+
 def generate_dataset(
     provider: str,
     questions_file: str,
@@ -88,7 +128,7 @@ def generate_dataset(
     system_prompt_label: Optional[str] = None,
     progress: bool = True,
 ) -> tuple[str, bool]:
-    """Persist successful answers and return the path and batch-aborted state."""
+    """Persist each completed answer; return path and abort status."""
     # Load questions (limit=None means all if limit is 0)
     load_limit = None if limit == 0 else limit
     questions = load_eval_questions(questions_file, limit=load_limit)
@@ -97,52 +137,25 @@ def generate_dataset(
 
     # Get system prompt if requested
     system_prompt = _load_system_prompt(engine, use_system_prompt)
+    out_path = Path(output_dataset)
+    if use_system_prompt and system_prompt:
+        _append_jsonl_record(out_path, {"role": "system", "content": system_prompt})
+
+    def checkpoint(response: dict) -> None:
+        _save_generated_answer(
+            out_path, response, gen_model=gen_model,
+            use_system_prompt=use_system_prompt, system_prompt_label=system_prompt_label,
+        )
 
     # Generate responses using the unified method
-    responses = engine.generate_responses(
-        questions,
+    responses = _generate_responses(
+        engine, questions, artifact=out_path,
         provider=provider,
         model=gen_model,
         system=system_prompt if use_system_prompt else None,
         progress=progress,
+        on_result=checkpoint,
     )
-
-    out_path = Path(output_dataset)
-    mode_flag = "a" if out_path.exists() else "w"
-    print(
-        f"[generate] {'Appending to' if mode_flag == 'a' else 'Creating'} dataset: {out_path}"
-    )
-    with out_path.open(mode_flag, encoding="utf-8") as f:
-        if use_system_prompt and system_prompt:
-            f.write(
-                json.dumps(
-                    {"role": "system", "content": system_prompt}, ensure_ascii=False
-                )
-                + "\n"
-            )
-
-        for r in responses:
-            if "error" in r:
-                print(
-                    f"[warning] Error generating response for question {r['index']}: {r['error']}"
-                )
-                continue
-
-            msgs = [
-                {"role": "user", "content": r["question"]},
-                {"role": "assistant", "content": r["answer"]},
-            ]
-
-            obj = {
-                "messages": msgs,
-                "gen_model": gen_model,
-                "provider": r.get("provider"),
-                "timestamp": dt.now().astimezone().isoformat(),
-                "use_system_prompt": use_system_prompt,
-            }
-            if system_prompt_label:
-                obj["system_prompt_label"] = system_prompt_label
-            f.write(json.dumps(obj, ensure_ascii=False) + "\n")
     return str(out_path), responses.aborted
 
 
@@ -233,13 +246,11 @@ def update_comparison_csv(
     print(f"[csv] Updated -> {csv_path}")
 
 
-def append_results_jsonl(path: Path, results: List[dict], meta: dict) -> None:
-    mode = "a" if path.exists() else "w"
-    with path.open(mode, encoding="utf-8") as f:
-        for r in results:
-            r_out = {**r, **meta}
-            f.write(json.dumps(r_out, ensure_ascii=False) + "\n")
-    print(f"[results] Appended {len(results)} -> {path}")
+def append_results_jsonl(path: Path, results: List[dict], meta: dict, *, quiet: bool = False) -> None:
+    for record in results:
+        _append_jsonl_record(path, {**record, **meta})
+    if not quiet:
+        print(f"[results] Appended {len(results)} -> {path}")
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -312,9 +323,14 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help="Do not update the legacy transposed comparison CSV",
     )
     p.add_argument(
+        "--generate-only",
+        action="store_true",
+        help="Generate a complete answer set, then exit without judging",
+    )
+    p.add_argument(
         "--require-complete-answers",
         action="store_true",
-        help="Fail before judging if any selected question has a missing or blank answer",
+        help="Fail before judging on missing or blank answers",
     )
     p.add_argument(
         "--results-jsonl",
@@ -390,7 +406,9 @@ def infer_system_prompt_label_from_dataset(path: Path) -> str | None:
 
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
-
+    generation_mode = args.mode.startswith("generate")
+    if args.generate_only and not generation_mode:
+        raise SystemExit("--generate-only requires a generation mode")
     # Directory scaffolding based on language & mode
     base_lang_dir = Path("data") / args.language
     training_dir = base_lang_dir / "training_datasets"
@@ -429,12 +447,13 @@ def main(argv: List[str]) -> int:
     else:
         comparison_csv_path = default_comp_csv
 
-    # Build judge engine
-    engine = EvaluationEngine(model=args.judge_model, language=args.language)
-    print(f"[init] Judge model: {args.judge_model}")
+    engine = EvaluationEngine(
+        model=args.judge_model, language=args.language,
+        initialize_judge=not args.generate_only,
+    )
+    if not args.generate_only:
+        print(f"[init] Judge model: {args.judge_model}")
     print(f"[init] Language: {args.language} | Mode: {args.mode}")
-
-    generation_mode = args.mode.startswith("generate")
 
     # MODE: generation (ft_evals or api_evals)
     if generation_mode:
@@ -562,40 +581,37 @@ def main(argv: List[str]) -> int:
             if q not in q_to_a:
                 q_to_a[q] = a
         missing_questions = [q for q in eval_questions if not q_to_a.get(q, "").strip()]
+        reused_answers = len(eval_questions) - len(missing_questions)
+        accounted = reused_answers
+        print(f"[resume] Answers: {reused_answers}/{len(eval_questions)} saved; {len(missing_questions)} remaining")
+        emit_progress("generating", accounted, len(eval_questions), reused=accounted)
         if missing_questions:
             print(
                 f"[retry] {len(missing_questions)} missing answers detected, retrying generation..."
             )
-            retry_responses = engine.generate_responses(
-                missing_questions,
+            retried = 0
+
+            def checkpoint_retry(response: dict) -> None:
+                nonlocal retried
+                _save_generated_answer(
+                    dataset_path, response, gen_model=args.gen_model,
+                    use_system_prompt=args.use_system_prompt,
+                    system_prompt_label=args.system_prompt_label,
+                )
+                if "error" not in response:
+                    q_to_a[response["question"]] = response["answer"]
+                    retried += 1
+
+            retry_responses = _generate_responses(
+                engine, missing_questions, artifact=dataset_path,
                 provider=args.provider,
                 model=args.gen_model,
                 system=_load_system_prompt(engine, args.use_system_prompt),
                 progress=not args.no_progress,
+                on_result=checkpoint_retry,
+                progress_initial=accounted,
+                progress_total=len(eval_questions),
             )
-            # Append retried answers to the JSONL and update q_to_a
-            retried = 0
-            with dataset_path.open("a", encoding="utf-8") as f:
-                for r in retry_responses:
-                    if "error" in r:
-                        print(f"[retry] Still failed: {r['question'][:60]}... -> {r['error']}")
-                        continue
-                    q_to_a[r["question"]] = r["answer"]
-                    retried += 1
-                    msgs = [
-                        {"role": "user", "content": r["question"]},
-                        {"role": "assistant", "content": r["answer"]},
-                    ]
-                    obj = {
-                        "messages": msgs,
-                        "gen_model": args.gen_model,
-                        "provider": r.get("provider"),
-                        "timestamp": dt.now().astimezone().isoformat(),
-                        "use_system_prompt": args.use_system_prompt,
-                    }
-                    if args.system_prompt_label:
-                        obj["system_prompt_label"] = args.system_prompt_label
-                    f.write(json.dumps(obj, ensure_ascii=False) + "\n")
             print(f"[retry] Recovered {retried}/{len(missing_questions)} missing answers")
             if retry_responses.aborted:
                 print(
@@ -615,9 +631,7 @@ def main(argv: List[str]) -> int:
                     (q, "")
                 )  # Placeholder blank answer -> evaluation engine will penalize
         if missing:
-            print(
-                f"[generate-eval] WARNING: {missing} missing answers still present (will be penalized)."
-            )
+            print(f"[generate-eval] {missing} unanswered questions retained in the scoring denominator.")
         print(
             f"[generate-eval] Prepared {len(pairs)} question/answer pairs for evaluation."
         )
@@ -651,9 +665,7 @@ def main(argv: List[str]) -> int:
                 pairs.append((q, ""))  # Empty answer triggers penalty
         
         if missing_count:
-            print(
-                f"[dataset] WARNING: {missing_count} missing answers inserted as empty strings (will be penalized)."
-            )
+            print(f"[dataset] {missing_count} unanswered questions retained in the scoring denominator.")
         else:
             print(
                 f"[load] Filtered {len(pairs)} evaluation pairs from dataset (strict 100-question set)."
@@ -662,14 +674,18 @@ def main(argv: List[str]) -> int:
     if not pairs:
         print("[failed] No question/answer pairs available for evaluation.")
         return 1
-    if args.require_complete_answers:
-        missing_answers = sum(not answer.strip() for _, answer in pairs)
+    if args.require_complete_answers or args.generate_only:
+        missing_answers = sum(not answer.strip() for q, answer in pairs)
         if missing_answers:
             print(
                 f"[failed] {missing_answers}/{len(pairs)} answers are missing or blank. "
                 "Repair or resume answer generation before judging; no judge calls made."
             )
             return 1
+
+    if args.generate_only:
+        print(f"[done] Generation complete: {len(pairs)}/{len(pairs)} answers saved at {dataset_path}.")
+        return 0
 
     # Results JSONL placement (mode dependent) -- resolve path BEFORE evaluation
     if args.mode in ("dataset", "extended"):
@@ -692,6 +708,7 @@ def main(argv: List[str]) -> int:
 
     # Load existing eval results for incremental evaluation
     existing_results: Dict[str, dict] = {}
+    current_answers = dict(pairs)
     if results_jsonl.exists():
         with results_jsonl.open("r", encoding="utf-8") as f:
             for line in f:
@@ -702,10 +719,15 @@ def main(argv: List[str]) -> int:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(obj, dict):
+                    continue
                 q = obj.get("question", "")
                 answer = obj.get("answer", "")
                 # Keep result if it has a valid evaluation and the answer wasn't empty
-                if q and is_scored_record(obj) and isinstance(answer, str) and answer.strip():
+                if (
+                    isinstance(q, str) and q and is_scored_record(obj)
+                    and isinstance(answer, str) and answer.strip() and answer == current_answers.get(q)
+                ):
                     existing_results[q] = obj
         print(f"[eval] Found {len(existing_results)} existing evaluations in {results_jsonl}")
 
@@ -715,9 +737,43 @@ def main(argv: List[str]) -> int:
         if q not in existing_results:
             pairs_to_eval.append((q, a))
 
+    # Metadata is available before the batch so every result is checkpointed.
+    dataset_absolute = dataset_path.resolve()
+    try:
+        dataset_metadata_path = dataset_absolute.relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        dataset_metadata_path = str(dataset_absolute)
+    meta = {
+        "dataset": dataset_metadata_path,
+        "answers_label": answers_label,
+        "judge_model": args.judge_model,
+        "gen_model": effective_gen_model,
+        "provider": effective_provider,
+        "use_system_prompt": effective_use_system_prompt,
+        "system_prompt_label": system_prompt_label,
+        "questions_file": questions_file,
+        "language": args.language,
+        "mode": args.mode,
+        "extended_sample_size": len(pairs) if args.mode == "extended" else None,
+        "comparison_csv": None if args.skip_comparison_csv else str(comparison_csv_path),
+    }
+
+    def checkpoint_result(result: dict) -> None:
+        append_results_jsonl(
+            results_jsonl, [result],
+            {**meta, "timestamp": dt.now().astimezone().isoformat()}, quiet=True,
+        )
+
+    reused_scores = len(pairs) - len(pairs_to_eval)
+    print(f"[resume] Reviews: {reused_scores}/{len(pairs)} saved; {len(pairs_to_eval)} remaining")
+    emit_progress("judging", reused_scores, len(pairs), reused=reused_scores)
     if pairs_to_eval:
         print(f"[eval] Evaluating {len(pairs_to_eval)} new/missing pairs (skipping {len(pairs) - len(pairs_to_eval)} already evaluated)...")
-        new_results = engine.batch_evaluate(pairs_to_eval, limit=None, progress=not args.no_progress)
+        new_results = engine.batch_evaluate(
+            pairs_to_eval, limit=None, progress=not args.no_progress,
+            on_result=checkpoint_result,
+            progress_initial=reused_scores, progress_total=len(pairs),
+        )
         print("[eval] Done.")
     else:
         new_results = []
@@ -785,31 +841,8 @@ def main(argv: List[str]) -> int:
             meta_values=csv_meta_values,
         )
 
-    # Keep in-repository dataset metadata portable without changing external paths.
-    dataset_absolute = dataset_path.resolve()
-    try:
-        dataset_metadata_path = dataset_absolute.relative_to(Path.cwd().resolve()).as_posix()
-    except ValueError:
-        dataset_metadata_path = str(dataset_absolute)
-
-    # Append attempted results, including errors, so successful work is resumable.
-    meta = {
-        "dataset": dataset_metadata_path,
-        "answers_label": answers_label,
-        "judge_model": args.judge_model,
-        "gen_model": effective_gen_model,
-        "provider": effective_provider,
-        "use_system_prompt": effective_use_system_prompt,
-        "system_prompt_label": system_prompt_label,
-        "questions_file": questions_file,
-        "language": args.language,
-        "mode": args.mode,
-        "extended_sample_size": len(pairs) if args.mode == "extended" else None,
-        "comparison_csv": None if args.skip_comparison_csv else str(comparison_csv_path),
-        "timestamp": dt.now().astimezone().isoformat(),
-    }
     if new_results:
-        append_results_jsonl(results_jsonl, new_results, meta)
+        print(f"[results] Checkpointed {len(new_results)} judge results -> {results_jsonl}")
     else:
         print(f"[results] No new results to append to {results_jsonl}")
     if failed_count:
@@ -820,6 +853,8 @@ def main(argv: List[str]) -> int:
         return 1
     print("[done] Completed.")
     return 0
+
+
 
 
 if __name__ == "__main__":
