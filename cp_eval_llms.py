@@ -55,7 +55,8 @@ from parrot_ai.llm_evals import (
     build_rows_order,
 )
 from parrot_ai.llm_evals.master_csv import infer_dataset_metadata
-from parrot_ai.llm_evals.score_validation import is_scored_record
+from parrot_ai.llm_evals.score_validation import is_scored_record, is_generation_failure_penalty, minimum_rubric_scores
+from parrot_ai.generation_failures import is_terminal_generation_failure, load_generation_failures
 from parrot_ai.llm_evals.progress_reporting import emit_progress
 
 
@@ -111,6 +112,9 @@ def _save_generated_answer(
     }
     if system_prompt_label:
         record["system_prompt_label"] = system_prompt_label
+    for key in ("generation_failure",):
+        if key in response:
+            record[key] = response[key]
     _append_jsonl_record(path, record)
 
 
@@ -128,7 +132,7 @@ def generate_dataset(
     system_prompt_label: Optional[str] = None,
     progress: bool = True,
 ) -> tuple[str, bool]:
-    """Persist each completed answer; return path and abort status."""
+    """Persist answers and terminal model failures; return path and abort status."""
     # Load questions (limit=None means all if limit is 0)
     load_limit = None if limit == 0 else limit
     questions = load_eval_questions(questions_file, limit=load_limit)
@@ -325,12 +329,12 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument(
         "--generate-only",
         action="store_true",
-        help="Generate a complete answer set, then exit without judging",
+        help="Account for every question with an answer or terminal model failure, then exit without judging",
     )
     p.add_argument(
         "--require-complete-answers",
         action="store_true",
-        help="Fail before judging on missing or blank answers",
+        help="Fail before judging on unresolved missing/blank answers; recorded terminal model failures receive local penalties",
     )
     p.add_argument(
         "--results-jsonl",
@@ -530,6 +534,7 @@ def main(argv: List[str]) -> int:
             print(f"[infer] Using inferred system prompt label: {system_prompt_label}")
 
     dataset_metadata = infer_dataset_metadata(dataset_path)
+    generation_failures = load_generation_failures(dataset_path)
     effective_gen_model = args.gen_model or dataset_metadata.get("gen_model")
     effective_provider = args.provider or dataset_metadata.get("provider")
     effective_use_system_prompt = (
@@ -580,10 +585,12 @@ def main(argv: List[str]) -> int:
         for q, a in raw_pairs:
             if q not in q_to_a:
                 q_to_a[q] = a
-        missing_questions = [q for q in eval_questions if not q_to_a.get(q, "").strip()]
-        reused_answers = len(eval_questions) - len(missing_questions)
-        accounted = reused_answers
-        print(f"[resume] Answers: {reused_answers}/{len(eval_questions)} saved; {len(missing_questions)} remaining")
+        terminal_questions = {q for q in eval_questions if q in generation_failures and not q_to_a.get(q, "").strip()}
+        missing_questions = [q for q in eval_questions if not q_to_a.get(q, "").strip() and q not in terminal_questions]
+        reused_answers = len(eval_questions) - len(missing_questions) - len(terminal_questions)
+        accounted = reused_answers + len(terminal_questions)
+        print(f"[resume] Answers: {reused_answers}/{len(eval_questions)} saved; {len(missing_questions)} remaining"
+              + (f"; {len(terminal_questions)} recorded model failures" if terminal_questions else ""))
         emit_progress("generating", accounted, len(eval_questions), reused=accounted)
         if missing_questions:
             print(
@@ -598,7 +605,9 @@ def main(argv: List[str]) -> int:
                     use_system_prompt=args.use_system_prompt,
                     system_prompt_label=args.system_prompt_label,
                 )
-                if "error" not in response:
+                if is_terminal_generation_failure(response):
+                    generation_failures[response["question"]] = response
+                elif "error" not in response:
                     q_to_a[response["question"]] = response["answer"]
                     retried += 1
 
@@ -675,7 +684,7 @@ def main(argv: List[str]) -> int:
         print("[failed] No question/answer pairs available for evaluation.")
         return 1
     if args.require_complete_answers or args.generate_only:
-        missing_answers = sum(not answer.strip() for q, answer in pairs)
+        missing_answers = sum(not answer.strip() and q not in generation_failures for q, answer in pairs)
         if missing_answers:
             print(
                 f"[failed] {missing_answers}/{len(pairs)} answers are missing or blank. "
@@ -684,7 +693,9 @@ def main(argv: List[str]) -> int:
             return 1
 
     if args.generate_only:
-        print(f"[done] Generation complete: {len(pairs)}/{len(pairs)} answers saved at {dataset_path}.")
+        failure_count = sum(not answer.strip() and q in generation_failures for q, answer in pairs)
+        print(f"[done] Generation complete: {len(pairs) - failure_count} answers and {failure_count} recorded model failures; "
+              f"{len(pairs)}/{len(pairs)} questions accounted for at {dataset_path}.")
         return 0
 
     # Results JSONL placement (mode dependent) -- resolve path BEFORE evaluation
@@ -726,7 +737,12 @@ def main(argv: List[str]) -> int:
                 # Keep result if it has a valid evaluation and the answer wasn't empty
                 if (
                     isinstance(q, str) and q and is_scored_record(obj)
-                    and isinstance(answer, str) and answer.strip() and answer == current_answers.get(q)
+                    and (
+                        (isinstance(answer, str) and answer.strip() and answer == current_answers.get(q))
+                        or (is_generation_failure_penalty(obj) and current_answers.get(q) == ""
+                            and q in generation_failures
+                            and obj["generation_failure"] == generation_failures[q]["generation_failure"])
+                    )
                 ):
                     existing_results[q] = obj
         print(f"[eval] Found {len(existing_results)} existing evaluations in {results_jsonl}")
@@ -763,6 +779,24 @@ def main(argv: List[str]) -> int:
             results_jsonl, [result],
             {**meta, "timestamp": dt.now().astimezone().isoformat()}, quiet=True,
         )
+
+    local_penalties = 0
+    remaining_pairs = []
+    for q, answer in pairs_to_eval:
+        if not answer.strip() and q in generation_failures:
+            penalty = {
+                "question": q, "answer": "", "generation_failure": generation_failures[q]["generation_failure"],
+                "evaluation_source": "generation_failure_penalty", "evaluation": minimum_rubric_scores(args.language),
+            }
+            checkpoint_result(penalty)
+            existing_results[q] = penalty
+            local_penalties += 1
+        else:
+            remaining_pairs.append((q, answer))
+    pairs_to_eval = remaining_pairs
+    if local_penalties:
+        print(f"[penalty] Recorded {local_penalties} model failures at minimum rubric scores without judge calls; "
+              f"scoring denominator remains {len(pairs)} questions")
 
     reused_scores = len(pairs) - len(pairs_to_eval)
     print(f"[resume] Reviews: {reused_scores}/{len(pairs)} saved; {len(pairs_to_eval)} remaining")
@@ -841,8 +875,8 @@ def main(argv: List[str]) -> int:
             meta_values=csv_meta_values,
         )
 
-    if new_results:
-        print(f"[results] Checkpointed {len(new_results)} judge results -> {results_jsonl}")
+    if new_results or local_penalties:
+        print(f"[results] Checkpointed {len(new_results)} judge results and {local_penalties} model-failure penalties -> {results_jsonl}")
     else:
         print(f"[results] No new results to append to {results_jsonl}")
     if failed_count:

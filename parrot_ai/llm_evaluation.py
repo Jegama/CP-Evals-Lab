@@ -50,8 +50,9 @@ from .llm_evals import (
     has_arabic_theological_terminology,
 )
 from .llm_evals.progress_reporting import emit_progress
-from .llm_evals.score_validation import has_rubric_scores
+from .llm_evals.score_validation import has_rubric_scores, minimum_rubric_scores
 from .gemini_transport import gemini_http_options
+from .generation_failures import TerminalGenerationFailure
 
 load_dotenv()
 
@@ -135,56 +136,7 @@ class EvaluationEngine:
         """Evaluate a single (question, answer) pair returning rubric dict."""
         # Fast path for empty / whitespace-only answers: assign all 1s (lowest rubric) + penalty
         if not answer.strip():
-            temp: dict[str, dict[str, int | str]] = {
-                "Adherence": {
-                    k: 1
-                    for k in [
-                        "Core",
-                        "Secondary",
-                        "Tertiary_Handling",
-                        "Biblical_Basis",
-                        "Consistency",
-                        "Overall",
-                    ]
-                },
-                "Kindness_and_Gentleness": {
-                    k: 1
-                    for k in [
-                        "Core_Clarity_with_Kindness",
-                        "Pastoral_Sensitivity",
-                        "Secondary_Fairness",
-                        "Tertiary_Neutrality",
-                        "Tone",
-                        "Overall",
-                    ]
-                },
-                "Interfaith_Sensitivity": {
-                    k: 1
-                    for k in [
-                        "Respect_and_Handling_Objections",
-                        "Objection_Acknowledgement",
-                        "Evangelism",
-                        "Gospel_Boldness",
-                        "Overall",
-                    ]
-                },
-            }
-            if self.language == "arabic":
-                temp["Arabic_Accuracy"] = {
-                    **{
-                        k: 1
-                        for k in [
-                            "Grammar_and_Syntax",
-                            "Theological_Nuance",
-                            "Contextual_Clarity",
-                            "Consistency_of_Terms",
-                            "Arabic_Purity",
-                            "Overall",
-                        ]
-                    },
-                    "Penalty_Reason": "Empty answer",
-                }
-            return temp
+            return minimum_rubric_scores(self.language)
         if self.language == "arabic":
             user_content = f"السؤال:\n{question}\n\nالإجابة:\n{answer}\n\nقيّم وفق التعليمات السابقة."
         else:
@@ -213,6 +165,9 @@ class EvaluationEngine:
                 contents=contents,
                 config=cfg,
             )
+            candidates = getattr(resp, "candidates", None) or []
+            if candidates and getattr(candidates[0], "finish_reason", None) == "RECITATION":
+                raise ValueError("Gemini judge output blocked: RECITATION")
             # Prefer structured parsed output; fallback to parsing JSON text
             result_dict: dict
             parsed_obj = getattr(resp, "parsed", None)
@@ -509,6 +464,14 @@ class EvaluationEngine:
                     }
                 )
                 consecutive_errors = 0
+            except TerminalGenerationFailure as e:
+                out.append({
+                    "index": i, "question": q, "answer": "", "model": use_model,
+                    "provider": provider, "system_used": bool(system),
+                    "generation_failure": e.metadata(),
+                })
+                consecutive_errors = 0
+                tqdm.write(f"[model failure] Generation {i + 1}: {e.reason}; recorded for minimum scoring, no retry")
             except Exception as e:
                 out.append(
                     {

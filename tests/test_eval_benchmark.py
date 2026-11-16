@@ -130,7 +130,7 @@ def test_dry_run_is_human_readable_and_never_calls_provider_evaluation(capsys):
     output = capsys.readouterr().out
     assert "Benchmark plan" in output
     assert "Default judge panel (1):" in output
-    assert "Judges wait for every question to have a valid answer" in output
+    assert "Judges wait for every question to have an answer or recorded model failure" in output
     assert "openai:gpt-5.6-luna [judge contender]" in output
     assert f"total provider evaluation operations: {expected_operations}" in output
     assert "english_api_registry.json" in output

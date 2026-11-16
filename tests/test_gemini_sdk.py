@@ -199,3 +199,23 @@ def test_gemini_socket_timeout_exhaustion_is_bounded(gemini_transport):
     with pytest.raises(httpx2.ReadTimeout):
         ParrotAIGemini(language="english").generate("Question")
     assert len(requests) == 5
+
+
+def test_sync_generation_exposes_recitation_as_terminal_outcome(gemini_transport):
+    from parrot_ai.generation_failures import TerminalGenerationFailure
+    requests, response = gemini_transport
+    response["finish_reason"] = "RECITATION"
+    with pytest.raises(TerminalGenerationFailure, match="RECITATION"):
+        ParrotAIGemini(language="english").generate("Question")
+    assert len(requests) == 1
+
+
+def test_sync_judge_recitation_stays_an_evaluation_error(gemini_transport):
+    requests, response = gemini_transport
+    response["finish_reason"] = "RECITATION"
+    engine = EvaluationEngine(model="gemini-test", language="english")
+    results = engine.batch_evaluate([("Question", "Valid answer")], progress=False)
+    assert len(requests) == 1
+    assert "RECITATION" in results[0]["error"]
+    assert "generation_failure" not in results[0]
+    assert "evaluation" not in results[0]

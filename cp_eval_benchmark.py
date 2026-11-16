@@ -27,6 +27,7 @@ from parrot_ai.llm_evals.master_csv import ResultSource
 from parrot_ai.llm_evals.progress_reporting import PROGRESS_FILE_ENV
 from parrot_ai.llm_evals.result_registry import append_result_sources, validate_result_source
 from parrot_ai.llm_evals.data_loading import load_eval_questions, load_qa_pairs
+from parrot_ai.generation_failures import load_generation_failures
 
 
 RunEvaluation = Callable[[list[str]], int]
@@ -366,7 +367,7 @@ def print_benchmark_plan(
     print(f"  Default judge panel ({len(config.default_judge_models)}):")
     for judge_model in config.default_judge_models:
         print(f"    - {judge_model}")
-    print("  Judges wait for every question to have a valid answer; each judge runs independently")
+    print("  Judges wait for every question to have an answer or recorded model failure; each judge runs independently")
     print(f"  System prompt: {config.system_prompt_label}")
     print(f"  New models ({len(config.generation_targets)}):")
     for index, target in enumerate(config.generation_targets, start=1):
@@ -636,7 +637,8 @@ def _validate_operation_output(
         raise ValueError("Cannot verify generation: no evaluation questions loaded")
     dataset = operation.command[operation.command.index("--output-dataset") + 1]
     answers = dict(load_qa_pairs(dataset, question_list_path=None, limit=0))
-    missing = sum(not answers.get(question, "").strip() for question in questions)
+    failures = load_generation_failures(Path(dataset))
+    missing = sum(not answers.get(question, "").strip() and question not in failures for question in questions)
     if missing:
         raise ValueError(f"Answer generation incomplete: {missing}/{len(questions)} answers missing")
 

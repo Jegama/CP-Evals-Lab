@@ -6,6 +6,7 @@ from parrot_ai.evaluation_schemas import (
     InterfaithSensitivityModel,
     KindnessGentlenessModel,
 )
+from parrot_ai.generation_failures import is_terminal_generation_failure
 
 
 _RUBRIC_FIELDS = {
@@ -37,10 +38,37 @@ def has_rubric_scores(evaluation: object) -> bool:
     return False
 
 
+def minimum_rubric_scores(language: str = "english") -> dict:
+    sections = {section: {field: 1 for field in fields} for section, fields in _RUBRIC_FIELDS.items()
+                if language == "arabic" or section != "Arabic_Accuracy"}
+    if language == "arabic":
+        sections["Arabic_Accuracy"]["Penalty_Reason"] = "Empty answer"
+    return sections
+
+
+def is_generation_failure_penalty(record: object) -> bool:
+    if not is_terminal_generation_failure(record):
+        return False
+    if (record.get("evaluation_source") != "generation_failure_penalty"
+            or record.get("answer") != "" or "error" in record):
+        return False
+    evaluation = record.get("evaluation")
+    if not isinstance(evaluation, dict):
+        return False
+    expected = minimum_rubric_scores("arabic" if "Arabic_Accuracy" in evaluation else "english")
+    return all(
+        isinstance(evaluation.get(section), dict)
+        and all(type(evaluation[section].get(field)) is int and evaluation[section][field] == 1
+                for field, value in fields.items() if type(value) is int)
+        for section, fields in expected.items()
+    )
+
+
 def is_scored_record(record: object) -> bool:
     """Reject error-marked records even if they contain leftover scores."""
     return (
         isinstance(record, dict)
         and "error" not in record
+        and ("generation_failure" not in record or is_generation_failure_penalty(record))
         and has_rubric_scores(record.get("evaluation"))
     )

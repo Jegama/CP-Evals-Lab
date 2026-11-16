@@ -13,7 +13,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from .aggregation import aggregate_score_statistics, score_metric_order
-from .score_validation import is_scored_record
+from .score_validation import is_scored_record, is_generation_failure_penalty
 
 
 MASTER_METADATA_COLUMNS = [
@@ -27,6 +27,7 @@ MASTER_METADATA_COLUMNS = [
     "evaluated_at",
     "timestamp_source",
     "question_count",
+    "generation_failure_count",
     "error_count",
     "source_dataset",
     "source_results",
@@ -319,6 +320,7 @@ def build_master_row(
         "evaluated_at": evaluated_at,
         "timestamp_source": timestamp_source,
         "question_count": len(results),
+        "generation_failure_count": sum(is_generation_failure_penalty(record) for record in results),
         "error_count": error_count,
         "source_dataset": _relative_display_path(dataset_path, repo_root),
         "source_results": _relative_display_path(results_path, repo_root),
