@@ -8,6 +8,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -24,13 +25,14 @@ from parrot_ai.llm_evals.benchmark_config import (
     sanitize_filename,
 )
 from parrot_ai.llm_evals.master_csv import ResultSource
-from parrot_ai.llm_evals.progress_reporting import PROGRESS_FILE_ENV
+from parrot_ai.llm_evals.progress_reporting import PROGRESS_FILE_ENV, BATCH_PENDING_EXIT_CODE
 from parrot_ai.llm_evals.result_registry import append_result_sources, validate_result_source
 from parrot_ai.llm_evals.data_loading import load_eval_questions, load_qa_pairs
 from parrot_ai.generation_failures import load_generation_failures
 
 
 RunEvaluation = Callable[[list[str]], int]
+BATCH_POLL_SECONDS = 30
 
 
 class BenchmarkRunError(RuntimeError):
@@ -124,7 +126,13 @@ def _common_args(config: BenchmarkConfig) -> list[str]:
         str(config.question_tags.resolve()),
         "--skip-comparison-csv",
         "--require-complete-answers",
+        "--gemini-execution", config.gemini_execution,
     ]
+    if config.gemini_execution == "batch":
+        args.extend([
+            "--gemini-batch-no-wait",
+            "--gemini-batch-sync-fallback-max", str(config.gemini_batch_sync_fallback_max),
+        ])
     return args
 
 
@@ -368,6 +376,11 @@ def print_benchmark_plan(
     for judge_model in config.default_judge_models:
         print(f"    - {judge_model}")
     print("  Judges wait for every question to have an answer or recorded model failure; each judge runs independently")
+    print(f"  Gemini execution: {config.gemini_execution}")
+    if config.gemini_execution == "batch":
+        print("    Remote batches continue after local interruption; rerun to retrieve saved jobs")
+        if config.gemini_batch_sync_fallback_max:
+            print(f"    Sync recovery: up to {config.gemini_batch_sync_fallback_max} failed requests per operation at standard pricing")
     print(f"  System prompt: {config.system_prompt_label}")
     print(f"  New models ({len(config.generation_targets)}):")
     for index, target in enumerate(config.generation_targets, start=1):
@@ -579,6 +592,7 @@ def _run_subprocess(
     repo_root: Path,
     log_path: Path,
     progress_path: Path | None,
+    append_log: bool = False,
 ) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     operation_args = list(operation.command)
@@ -594,7 +608,7 @@ def _run_subprocess(
         str(repo_root / "cp_eval_llms.py"),
         *operation_args,
     ]
-    with log_path.open("w", encoding="utf-8") as log:
+    with log_path.open("a" if append_log else "w", encoding="utf-8") as log:
         log.write(f"$ {shlex.join(command)}\n\n")
         log.flush()
         completed = subprocess.run(
@@ -657,6 +671,8 @@ def _execute_operations(
     completed_ids: set[str] = set()
     failed_ids: set[str] = set()
     skipped_ids: set[str] = set()
+    deferred_until: dict[str, float] = {}
+    started_ids: set[str] = set()
     running: dict[Future[int], tuple[BenchmarkOperation, int]] = {}
     positions = {
         operation.operation_id: index for index, operation in enumerate(operations)
@@ -677,6 +693,7 @@ def _execute_operations(
             operation,
             repo_root=repo_root,
             log_path=_operation_log_path(config, operation),
+            append_log=operation.operation_id in deferred_until,
             progress_path=(
                 _operation_progress_path(config, operation)
                 if display.enabled
@@ -721,25 +738,31 @@ def _execute_operations(
                         dependency in completed_ids
                         for dependency in operation.dependencies
                     )
+                    and deferred_until.get(operation.operation_id, 0) <= time.monotonic()
                 ]
                 ready.sort(
                     key=lambda operation: (
+                        operation.operation_id in deferred_until,
                         operation.priority,
                         positions[operation.operation_id],
                     )
                 )
                 for operation in ready[:available_slots]:
                     pending.pop(operation.operation_id)
-                    started += 1
+                    first_start = operation.operation_id not in started_ids
+                    if first_start:
+                        started += 1
+                        started_ids.add(operation.operation_id)
                     position = available_positions.pop(0)
-                    display.write(
-                        f"[start {started}/{len(operations)}] "
-                        f"{operation.description}"
-                    )
+                    if first_start:
+                        display.write(
+                            f"[start {started}/{len(operations)}] "
+                            f"{operation.description}"
+                        )
                     if show_commands:
                         display.write(f"  $ {_render_command(operation)}")
                     progress_path = _operation_progress_path(config, operation)
-                    if run_evaluation is None:
+                    if run_evaluation is None and first_start:
                         log_path = _operation_log_path(config, operation)
                         display.write(
                             f"  log: {_display_path(log_path, repo_root)}"
@@ -750,6 +773,9 @@ def _execute_operations(
 
                 if not running:
                     if pending:
+                        if any(op_id in deferred_until for op_id in pending):
+                            time.sleep(0.25)
+                            continue
                         unresolved = ", ".join(sorted(pending))
                         raise RuntimeError(
                             "Benchmark dependency graph cannot make progress: "
@@ -759,7 +785,7 @@ def _execute_operations(
 
                 done, _ = wait(
                     running,
-                    timeout=0.25 if display.enabled else None,
+                    timeout=0.25 if display.enabled or deferred_until else None,
                     return_when=FIRST_COMPLETED,
                 )
                 display.refresh()
@@ -777,13 +803,20 @@ def _execute_operations(
                         exit_code = 1
                         failure_detail = f"; {exc}"
                     if exit_code == 0:
+                        deferred_until.pop(operation.operation_id, None)
                         completed_ids.add(operation.operation_id)
                         finished += 1
                         display.write(
                             f"[complete {finished}/{len(operations)}] "
                             f"{operation.description}"
                         )
+                    elif exit_code == BATCH_PENDING_EXIT_CODE:
+                        if operation.operation_id not in deferred_until:
+                            display.write(f"[batch pending] {operation.description}; remote job running, worker released")
+                        deferred_until[operation.operation_id] = time.monotonic() + BATCH_POLL_SECONDS
+                        pending[operation.operation_id] = operation
                     else:
+                        deferred_until.pop(operation.operation_id, None)
                         failed_ids.add(operation.operation_id)
                         display.write(
                             f"[failed] {operation.stage}: {operation.description} "
@@ -875,6 +908,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "\n[interrupted] Benchmark stopped. Rerun the same command to resume "
             "from answers and reviews checkpointed to disk. "
             "An in-flight request that was not checkpointed may need to run again."
+            " Submitted Gemini batches continue remotely; rerun to retrieve their results."
         )
         return 130
     if not args.dry_run and args.phase in (

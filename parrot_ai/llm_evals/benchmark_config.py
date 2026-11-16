@@ -47,6 +47,8 @@ class BenchmarkConfig:
     result_registry: Path
     generation_targets: tuple[GenerationTarget, ...]
     control_targets: tuple[ControlTarget, ...]
+    gemini_execution: str = "sync"
+    gemini_batch_sync_fallback_max: int = 0
 
     @property
     def judge_contenders(self) -> tuple[GenerationTarget, ...]:
@@ -168,12 +170,18 @@ def load_benchmark_config(path: Path, repo_root: Path) -> BenchmarkConfig:
         ),
         generation_targets=generation_targets,
         control_targets=control_targets,
+        gemini_execution=str(payload.get("gemini_execution", "sync")),
+        gemini_batch_sync_fallback_max=payload.get("gemini_batch_sync_fallback_max", 0),
     )
     validate_benchmark_config(config)
     return config
 
 
 def validate_benchmark_config(config: BenchmarkConfig) -> None:
+    if type(config.gemini_batch_sync_fallback_max) is not int or config.gemini_batch_sync_fallback_max < 0:
+        raise ValueError("gemini_batch_sync_fallback_max must be a non-negative integer")
+    if config.gemini_execution not in ("sync", "batch"):
+        raise ValueError("gemini_execution must be sync or batch")
     if not config.default_judge_models or any(
         not isinstance(model, str) or not model.strip()
         for model in config.default_judge_models

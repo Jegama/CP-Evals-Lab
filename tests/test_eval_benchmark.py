@@ -590,3 +590,54 @@ def test_additional_panel_labels_identify_their_own_judge():
             continue
         judge = operation.command[operation.command.index("--judge-model") + 1]
         assert operation.stage_label("judging").startswith(judge + " -> ")
+
+
+def test_pending_batch_releases_worker_and_is_polled_while_sync_work_runs(monkeypatch, capsys):
+    config = load_benchmark_config(CONFIG_PATH, REPO_ROOT)
+    config = replace(config, gemini_execution="batch", control_targets=())
+    first_label = config.generation_targets[0].answers_label
+    first_judge_done = threading.Event()
+    attempts = 0
+    monkeypatch.setattr(benchmark, "BATCH_POLL_SECONDS", 0.01)
+
+    def run_operation(command):
+        nonlocal attempts
+        label = command[command.index("--answers-label") + 1]
+        assert "--gemini-batch-no-wait" in command
+        if "--generate-only" in command:
+            if label == first_label:
+                attempts += 1
+                if attempts == 1:
+                    return benchmark.BATCH_PENDING_EXIT_CODE
+            else:
+                assert first_judge_done.wait(timeout=3), "Waiting batch monopolized the scheduler"
+        elif label == first_label:
+            first_judge_done.set()
+        _write_operation_result(command)
+        return 0
+
+    sources = run_benchmark(config, phase="generate", dry_run=False, jobs=2, run_evaluation=run_operation)
+    assert len(sources) == 2
+    assert attempts == 2
+    output = capsys.readouterr().out
+    assert "worker released" in output
+    assert "[failed]" not in output
+    assert "[start 5/4]" not in output
+
+
+def test_invalid_gemini_execution_is_rejected():
+    with pytest.raises(ValueError, match="gemini_execution"):
+        _load_with_judges(gemini_execution="unknown")
+
+
+@pytest.mark.parametrize("maximum", [-1, 1.5, "9", True])
+def test_invalid_gemini_sync_fallback_max_is_rejected(maximum):
+    with pytest.raises(ValueError, match="gemini_batch_sync_fallback_max"):
+        _load_with_judges(gemini_batch_sync_fallback_max=maximum)
+
+
+def test_gemini_sync_fallback_is_passed_to_operations():
+    config = _load_with_judges(gemini_execution="batch", gemini_batch_sync_fallback_max=9)
+    for operation in benchmark.selected_operations(config, "all"):
+        command = list(operation.command)
+        assert command[command.index("--gemini-batch-sync-fallback-max") + 1] == "9"

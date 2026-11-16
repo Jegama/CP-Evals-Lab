@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 PROGRESS_FILE_ENV = "CP_EVAL_PROGRESS_FILE"
+BATCH_PENDING_EXIT_CODE = 75
 
 
 def emit_progress(stage: str, current: int, total: int | None, *, reused: int | None = None) -> None:

@@ -5,15 +5,19 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from google.genai import types
 
 import cp_eval_llms as cli
 import cp_eval_benchmark as benchmark
 import parrot_ai.llm_evaluation as evaluation
+from parrot_ai import gemini_batch as batch
 from parrot_ai.generation_failures import TerminalGenerationFailure, load_generation_failures
 from parrot_ai.llm_evals.benchmark_config import load_benchmark_config
+from parrot_ai.llm_evals.gemini_batch_adapter import _request, judge_gemini_batch
 from parrot_ai.llm_evals.aggregation import aggregate_score_statistics
 from parrot_ai.llm_evals.master_csv import ResultSource, build_master_row
 from parrot_ai.llm_evals.score_validation import is_scored_record, minimum_rubric_scores
+from test_gemini_batch import FakeClient, response
 
 
 FAILURE = {"reason": "RECITATION", "terminal": True}
@@ -34,6 +38,34 @@ def dataset_record(question, *, failure=None):
     return record
 
 
+def test_cached_recitation_becomes_durable_outcome_without_another_provider_call(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    questions = [f"q{i}" for i in range(1, 501)]
+    questions_path = tmp_path / "questions.txt"
+    questions_path.write_text("\n".join(questions))
+    dataset = tmp_path / "answers.jsonl"
+    write_jsonl(dataset, [dataset_record(q) for q in questions if q != "q253"])
+    original = dataset.read_bytes()
+    client = FakeClient()
+    blocked = response("")
+    blocked["candidates"][0]["finishReason"] = "RECITATION"
+    client.rows = lambda request: {"response": blocked}
+    request = _request("q253", None)
+    batch.run_batch(model="gemini-test", requests={batch.request_key("gemini-test", request): request},
+                    artifact=dataset, consume=lambda *args: False, client=client)
+    monkeypatch.setattr(batch, "_new_client", Mock(side_effect=AssertionError("No provider calls allowed")))
+    args = ["--mode", "generate-api_evals", "--generate-only", "--provider", "google",
+            "--gen-model", "gemini-test", "--output-dataset", str(dataset), "--language", "english",
+            "--questions-file", str(questions_path), "--limit", "0", "--require-complete-answers",
+            "--gemini-execution", "batch", "--gemini-batch-sync-fallback-max", "9", "--no-progress"]
+    assert cli.main(args) == 0
+    assert dataset.read_bytes().startswith(original)
+    assert len(cli.load_qa_pairs(str(dataset), limit=0)) == 499
+    assert load_generation_failures(dataset)["q253"]["generation_failure"] == FAILURE
+    completed = dataset.read_bytes()
+    assert cli.main(args) == 0
+    assert dataset.read_bytes() == completed
+    batch._new_client.assert_not_called()
 
 
 @pytest.mark.parametrize("judge", ["gpt-test", "claude-test", "gemini-test"])
@@ -48,11 +80,20 @@ def test_499_judge_calls_plus_one_penalty_keep_denominator_500_and_resume(tmp_pa
     rubric = {section: {field: 5 for field in fields} for section, fields in minimum_rubric_scores().items()}
     engine.evaluate = Mock(return_value=rubric)
     monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
+    client = FakeClient()
+    client.rows = lambda request: {"response": response(json.dumps(rubric))}
+    monkeypatch.setattr(batch, "_new_client", lambda: client)
     results = tmp_path / "reviews.jsonl"
     args = ["--mode", "dataset", "--dataset", str(dataset), "--answers-label", "answers",
             "--judge-model", judge, "--results-jsonl", str(results), "--language", "english",
             "--questions-file", str(question_file), "--limit", "0", "--require-complete-answers",
-            "--skip-comparison-csv", "--no-progress"]
+            "--gemini-execution", "batch", "--skip-comparison-csv", "--no-progress"]
+    if judge.startswith("gemini"):
+        client.batches.get.side_effect = lambda **kwargs: types.BatchJob(name="batches/0", state="JOB_STATE_PENDING")
+        assert cli.main([*args, "--gemini-batch-no-wait"]) == 75
+        saved = [json.loads(line) for line in results.read_text().splitlines()]
+        assert len(saved) == 1 and saved[0]["evaluation_source"] == "generation_failure_penalty"
+        client.batches.get.side_effect = client.get
     assert cli.main(args) == 0
     records = [json.loads(line) for line in results.read_text().splitlines()]
     assert len(records) == 500 and all(is_scored_record(row) for row in records)
@@ -60,12 +101,19 @@ def test_499_judge_calls_plus_one_penalty_keep_denominator_500_and_resume(tmp_pa
     assert penalty["evaluation"] == minimum_rubric_scores()
     assert penalty["generation_failure"] == FAILURE
     assert penalty["evaluation_source"] == "generation_failure_penalty"
-    assert engine.evaluate.call_count == 499
-    assert all(call.args[0] != "q253" and call.args[1] for call in engine.evaluate.call_args_list)
+    if judge.startswith("gemini"):
+        assert sum(len(rows) for rows in client.uploads.values()) == 499
+        assert all("q253\n" not in row["request"]["contents"][0]["parts"][0]["text"]
+                   for rows in client.uploads.values() for row in rows)
+        assert client.batches.create.call_count == 1
+    else:
+        assert engine.evaluate.call_count == 499
+        assert all(call.args[0] != "q253" and call.args[1] for call in engine.evaluate.call_args_list)
     tags = {q: {} for q in questions}
     stats = aggregate_score_statistics(records, False, question_tags=tags)
     assert stats[("Adherence", "Core")].count == 500
-    assert stats[("Adherence", "Core")].mean == 4.99
+    # The normal Gemini postprocessing caps this fixture's Core at 4.
+    assert stats[("Adherence", "Core")].mean == (3.99 if judge.startswith("gemini") else 4.99)
     master = build_master_row(ResultSource(results), repo_root=tmp_path, question_tags=tags)
     assert master["question_count"] == 500
     assert master["generation_failure_count"] == 1
@@ -73,9 +121,21 @@ def test_499_judge_calls_plus_one_penalty_keep_denominator_500_and_resume(tmp_pa
     original = results.read_bytes()
     assert cli.main(args) == 0
     assert results.read_bytes() == original
-    assert engine.evaluate.call_count == 499
+    assert engine.evaluate.call_count == (0 if judge.startswith("gemini") else 499)
+    assert client.batches.create.call_count == int(judge.startswith("gemini"))
 
 
+def test_recitation_during_judging_is_an_error_not_an_answer_penalty(tmp_path, monkeypatch):
+    client = FakeClient()
+    blocked = response("")
+    blocked["candidates"][0]["finishReason"] = "RECITATION"
+    client.rows = lambda request: {"response": blocked}
+    monkeypatch.setattr(batch, "_new_client", lambda: client)
+    engine = evaluation.EvaluationEngine(model="gemini-test", language="english", initialize_judge=False)
+    records = judge_gemini_batch(engine, [("q", "valid answer")], artifact=tmp_path / "reviews.jsonl")
+    assert "RECITATION" in records[0]["error"]
+    assert "generation_failure" not in records[0]
+    assert not is_scored_record(records[0])
 
 
 def test_sync_generation_records_recitation_and_continues(monkeypatch):

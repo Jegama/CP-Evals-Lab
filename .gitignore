@@ -18,6 +18,7 @@ C3 Sermon Evals.md
 huggingface/
 *.mp3
 .cache/*
+data/**/gemini_batch_jobs/
 .agents/skills/developing-with-streamlit
 .claude/skills/developing-with-streamlit
 data/*/judge_calibration_studies/

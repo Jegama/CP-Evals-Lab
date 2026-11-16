@@ -137,10 +137,7 @@ class EvaluationEngine:
         # Fast path for empty / whitespace-only answers: assign all 1s (lowest rubric) + penalty
         if not answer.strip():
             return minimum_rubric_scores(self.language)
-        if self.language == "arabic":
-            user_content = f"السؤال:\n{question}\n\nالإجابة:\n{answer}\n\nقيّم وفق التعليمات السابقة."
-        else:
-            user_content = f"Question:\n{question}\n\nAnswer:\n{answer}\n\nEvaluate per the rubric instructions above."
+        user_content = self.evaluation_content(question, answer)
         # Choose response model based on language
         response_model = (
             EvaluationResultArabic
@@ -232,6 +229,15 @@ class EvaluationEngine:
                     "Failed to parse evaluation result from OpenAI response"
                 )
             result_dict = json.loads(parsed.model_dump_json())
+        return self.process_evaluation(question, answer, result_dict)
+
+    def evaluation_content(self, question: str, answer: str) -> str:
+        if self.language == "arabic":
+            return f"السؤال:\n{question}\n\nالإجابة:\n{answer}\n\nقيّم وفق التعليمات السابقة."
+        return f"Question:\n{question}\n\nAnswer:\n{answer}\n\nEvaluate per the rubric instructions above."
+
+    def process_evaluation(self, question: str, answer: str, result_dict: dict) -> dict:
+        """Apply the same score validation and ordered heuristics to either transport."""
         # Check before heuristics can create empty sections or coerce non-scores.
         if not has_rubric_scores(result_dict):
             raise ValueError("Judge returned no evaluation scores")

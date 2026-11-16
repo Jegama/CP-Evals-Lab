@@ -57,7 +57,7 @@ from parrot_ai.llm_evals import (
 from parrot_ai.llm_evals.master_csv import infer_dataset_metadata
 from parrot_ai.llm_evals.score_validation import is_scored_record, is_generation_failure_penalty, minimum_rubric_scores
 from parrot_ai.generation_failures import is_terminal_generation_failure, load_generation_failures
-from parrot_ai.llm_evals.progress_reporting import emit_progress
+from parrot_ai.llm_evals.progress_reporting import emit_progress, BATCH_PENDING_EXIT_CODE
 
 
 def sanitize_filename(name: str) -> str:
@@ -112,14 +112,29 @@ def _save_generated_answer(
     }
     if system_prompt_label:
         record["system_prompt_label"] = system_prompt_label
-    for key in ("generation_failure",):
+    for key in ("execution_mode", "batch_job", "request_key", "usage_metadata", "generation_failure"):
         if key in response:
             record[key] = response[key]
     _append_jsonl_record(path, record)
 
 
-def _generate_responses(engine, questions, *, artifact, **kwargs):
+def _generate_responses(engine, questions, *, artifact, gemini_execution="sync",
+                        batch_poll_seconds=30, batch_retry_unconfirmed=False, batch_wait=True,
+                        batch_sync_fallback_max=0, **kwargs):
+    if gemini_execution == "batch" and kwargs.get("provider") == "google":
+        from parrot_ai.llm_evals.gemini_batch_adapter import generate_gemini_batch
+        kwargs.pop("provider")
+        kwargs.pop("progress", None)
+        return generate_gemini_batch(
+            engine, questions, artifact=artifact, poll_seconds=batch_poll_seconds,
+            retry_unconfirmed=batch_retry_unconfirmed, wait=batch_wait,
+            sync_fallback_max=batch_sync_fallback_max, **kwargs,
+        )
+    if kwargs.get("provider") == "google":
+        from parrot_ai.gemini_batch import ensure_no_pending_batch
+        ensure_no_pending_batch(Path(artifact))
     return engine.generate_responses(questions, **kwargs)
+
 
 def generate_dataset(
     provider: str,
@@ -131,6 +146,11 @@ def generate_dataset(
     limit: int = 100,
     system_prompt_label: Optional[str] = None,
     progress: bool = True,
+    gemini_execution: str = "sync",
+    batch_poll_seconds: float = 30,
+    batch_retry_unconfirmed: bool = False,
+    batch_wait: bool = True,
+    batch_sync_fallback_max: int = 0,
 ) -> tuple[str, bool]:
     """Persist answers and terminal model failures; return path and abort status."""
     # Load questions (limit=None means all if limit is 0)
@@ -153,7 +173,9 @@ def generate_dataset(
 
     # Generate responses using the unified method
     responses = _generate_responses(
-        engine, questions, artifact=out_path,
+        engine, questions, artifact=out_path, gemini_execution=gemini_execution,
+        batch_poll_seconds=batch_poll_seconds, batch_retry_unconfirmed=batch_retry_unconfirmed,
+        batch_wait=batch_wait, batch_sync_fallback_max=batch_sync_fallback_max,
         provider=provider,
         model=gen_model,
         system=system_prompt if use_system_prompt else None,
@@ -327,6 +349,26 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help="Do not update the legacy transposed comparison CSV",
     )
     p.add_argument(
+        "--gemini-execution", choices=["sync", "batch"], default="sync",
+        help="Use synchronous Gemini calls or durable remote batches at batch rates",
+    )
+    p.add_argument(
+        "--gemini-batch-poll-seconds", type=float, default=30,
+        help="Seconds between remote Gemini batch status checks (default: 30)",
+    )
+    p.add_argument(
+        "--gemini-batch-no-wait", action="store_true",
+        help="Submit/check a batch and exit 75 while it runs (used by the benchmark scheduler)",
+    )
+    p.add_argument(
+        "--gemini-batch-retry-unconfirmed", action="store_true",
+        help="Allow resubmission ONLY after verifying an unconfirmed batch was not created remotely",
+    )
+    p.add_argument(
+        "--gemini-batch-sync-fallback-max", type=int, default=0,
+        help="Retry at most this many failed batch items synchronously per operation at standard rates (0 disables)",
+    )
+    p.add_argument(
         "--generate-only",
         action="store_true",
         help="Account for every question with an answer or terminal model failure, then exit without judging",
@@ -408,11 +450,24 @@ def infer_system_prompt_label_from_dataset(path: Path) -> str | None:
     return None
 
 
-def main(argv: List[str]) -> int:
+def _main(argv: List[str]) -> int:
     args = parse_args(argv)
     generation_mode = args.mode.startswith("generate")
     if args.generate_only and not generation_mode:
         raise SystemExit("--generate-only requires a generation mode")
+    if args.gemini_batch_poll_seconds <= 0:
+        raise SystemExit("--gemini-batch-poll-seconds must be positive")
+    if args.gemini_batch_sync_fallback_max < 0:
+        raise SystemExit("--gemini-batch-sync-fallback-max must be non-negative")
+    batch_judge = args.gemini_execution == "batch" and args.judge_model.startswith("gemini")
+    batch_options = dict(
+        gemini_execution=args.gemini_execution,
+        batch_poll_seconds=args.gemini_batch_poll_seconds,
+        batch_retry_unconfirmed=args.gemini_batch_retry_unconfirmed,
+        batch_wait=not args.gemini_batch_no_wait,
+        batch_sync_fallback_max=args.gemini_batch_sync_fallback_max,
+    )
+
     # Directory scaffolding based on language & mode
     base_lang_dir = Path("data") / args.language
     training_dir = base_lang_dir / "training_datasets"
@@ -453,7 +508,7 @@ def main(argv: List[str]) -> int:
 
     engine = EvaluationEngine(
         model=args.judge_model, language=args.language,
-        initialize_judge=not args.generate_only,
+        initialize_judge=not (args.generate_only or batch_judge),
     )
     if not args.generate_only:
         print(f"[init] Judge model: {args.judge_model}")
@@ -497,6 +552,7 @@ def main(argv: List[str]) -> int:
                 limit=args.limit,
                 system_prompt_label=args.system_prompt_label,
                 progress=not args.no_progress,
+                **batch_options,
             )
             dataset_path = Path(generated_path)
             if generation_aborted:
@@ -612,7 +668,7 @@ def main(argv: List[str]) -> int:
                     retried += 1
 
             retry_responses = _generate_responses(
-                engine, missing_questions, artifact=dataset_path,
+                engine, missing_questions, artifact=dataset_path, **batch_options,
                 provider=args.provider,
                 model=args.gen_model,
                 system=_load_system_prompt(engine, args.use_system_prompt),
@@ -803,11 +859,25 @@ def main(argv: List[str]) -> int:
     emit_progress("judging", reused_scores, len(pairs), reused=reused_scores)
     if pairs_to_eval:
         print(f"[eval] Evaluating {len(pairs_to_eval)} new/missing pairs (skipping {len(pairs) - len(pairs_to_eval)} already evaluated)...")
-        new_results = engine.batch_evaluate(
-            pairs_to_eval, limit=None, progress=not args.no_progress,
-            on_result=checkpoint_result,
-            progress_initial=reused_scores, progress_total=len(pairs),
-        )
+        if batch_judge:
+            from parrot_ai.llm_evals.gemini_batch_adapter import judge_gemini_batch
+            new_results = judge_gemini_batch(
+                engine, pairs_to_eval, artifact=results_jsonl,
+                on_result=checkpoint_result, progress_initial=reused_scores,
+                progress_total=len(pairs), poll_seconds=args.gemini_batch_poll_seconds,
+                retry_unconfirmed=args.gemini_batch_retry_unconfirmed,
+                wait=not args.gemini_batch_no_wait,
+                sync_fallback_max=args.gemini_batch_sync_fallback_max,
+            )
+        else:
+            if args.judge_model.startswith("gemini"):
+                from parrot_ai.gemini_batch import ensure_no_pending_batch
+                ensure_no_pending_batch(results_jsonl)
+            new_results = engine.batch_evaluate(
+                pairs_to_eval, limit=None, progress=not args.no_progress,
+                on_result=checkpoint_result,
+                progress_initial=reused_scores, progress_total=len(pairs),
+            )
         print("[eval] Done.")
     else:
         new_results = []
@@ -889,6 +959,13 @@ def main(argv: List[str]) -> int:
     return 0
 
 
+def main(argv: List[str]) -> int:
+    from parrot_ai.gemini_batch import GeminiBatchPending
+    try:
+        return _main(argv)
+    except GeminiBatchPending as exc:
+        print(f"[batch pending] {exc}; rerun to retrieve results, without resubmitting")
+        return BATCH_PENDING_EXIT_CODE
 
 
 if __name__ == "__main__":
