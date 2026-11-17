@@ -126,7 +126,8 @@ def test_first_judge_failure_does_not_block_others_and_rerun_reuses_saved_work(t
 @pytest.mark.skipif(os.name != "posix", reason="Uses POSIX process-group signals")
 @pytest.mark.parametrize("interrupt_signal", ["SIGINT", "SIGKILL"])
 @pytest.mark.parametrize("stage", ["generating", "judging"])
-def test_real_interruption_and_restart_preserves_checkpoints(tmp_path, stage, interrupt_signal):
+@pytest.mark.parametrize("interrupt_point", ["request", "checkpoint_write"])
+def test_real_interruption_and_restart_preserves_checkpoints(tmp_path, stage, interrupt_signal, interrupt_point):
     # The runner and CLI are real. Only provider calls are replaced, in the
     # worker subprocess itself; sockets are disabled to prevent live API calls.
     worker = tmp_path / "cp_eval_llms.py"
@@ -152,10 +153,44 @@ def request(stage, question, model):
     with Path("calls.jsonl").open("a") as stream:
         stream.write(json.dumps({"stage": stage, "question": question, "model": model}) + "\\n")
         stream.flush()
-    if os.environ.get("PAUSE_STAGE") == stage and question == os.environ.get("PAUSE_QUESTION"):
+    if (os.environ.get("PAUSE_POINT") == "request" and os.environ.get("PAUSE_STAGE") == stage
+            and question == os.environ.get("PAUSE_QUESTION")):
         Path("ready").write_text("waiting on the next request")
         while True:
             time.sleep(0.05)
+
+original_open = Path.open
+
+class InterruptedWrite:
+    def __init__(self, stream):
+        self.stream = stream
+    def __enter__(self):
+        self.stream.__enter__()
+        return self
+    def __exit__(self, *args):
+        return self.stream.__exit__(*args)
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+    def write(self, payload):
+        if payload.startswith(b'{'):
+            record = json.loads(payload)
+            stage = "generating" if "messages" in record else "judging"
+            question = record["messages"][0]["content"] if stage == "generating" else record.get("question")
+            if (os.environ.get("PAUSE_POINT") == "checkpoint_write" and os.environ.get("PAUSE_STAGE") == stage
+                    and question == os.environ.get("PAUSE_QUESTION")):
+                self.stream.write(payload[:len(payload) // 2])
+                self.stream.flush()
+                os.fsync(self.stream.fileno())
+                Path("ready").write_text("waiting during a checkpoint write")
+                while True:
+                    time.sleep(0.05)
+        return self.stream.write(payload)
+
+def interrupted_open(path, mode="r", *args, **kwargs):
+    stream = original_open(path, mode, *args, **kwargs)
+    return InterruptedWrite(stream) if mode == "a+b" else stream
+
+Path.open = interrupted_open
 
 class OfflineWrapper:
     def __init__(self, **kwargs):
@@ -203,7 +238,7 @@ raise SystemExit(cli.main(sys.argv[1:]))
         "result_registry": str(tmp_path / "registry.json"),
     }))
     command = [sys.executable, str(driver), "--config", str(config), "--jobs", "1", "--no-live-progress"]
-    env = {**os.environ, "PAUSE_STAGE": stage, "PAUSE_QUESTION": questions[-1]}
+    env = {**os.environ, "PAUSE_STAGE": stage, "PAUSE_QUESTION": questions[-1], "PAUSE_POINT": interrupt_point}
     env.pop("CP_EVAL_PROGRESS_FILE", None)
     process = subprocess.Popen(
         command, cwd=tmp_path, env=env, start_new_session=True,
@@ -239,11 +274,22 @@ raise SystemExit(cli.main(sys.argv[1:]))
     dataset = data / "api_evals/generated_api_openai_openai-offline-model-offline.jsonl"
     result_dir = data / "api_evals"
     first_results = result_dir / "eval_results_openai-offline-model-offline__judged_by_judge-a.jsonl"
-    answers = [record for record in _jsonl(dataset) if "messages" in record]
-    assert len(answers) == (question_count - 1 if stage == "generating" else question_count)
-    assert len(_jsonl(first_results)) == (0 if stage == "generating" else question_count - 1)
     saved_answers = dataset.read_bytes()
     saved_reviews = first_results.read_bytes() if first_results.exists() else b""
+    fragment = b""
+    if interrupt_point == "checkpoint_write":
+        if stage == "generating":
+            saved_answers, fragment = saved_answers.rsplit(b"\n", 1)
+            saved_answers += b"\n"
+        else:
+            saved_reviews, fragment = saved_reviews.rsplit(b"\n", 1)
+            saved_reviews += b"\n"
+        assert fragment
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(fragment)
+    answers = [json.loads(line) for line in saved_answers.splitlines() if b'"messages"' in line]
+    assert len(answers) == (question_count - 1 if stage == "generating" else question_count)
+    assert len(saved_reviews.splitlines()) == (0 if stage == "generating" else question_count - 1)
 
     # Restart in a fresh process, with the same manifest and saved files.
     env.pop("PAUSE_STAGE")
@@ -251,6 +297,10 @@ raise SystemExit(cli.main(sys.argv[1:]))
     assert restarted.returncode == 0, restarted.stdout + restarted.stderr
     assert dataset.read_bytes().startswith(saved_answers)
     assert first_results.read_bytes().startswith(saved_reviews)
+    if fragment:
+        artifact = dataset if stage == "generating" else first_results
+        backups = list(artifact.parent.glob(artifact.name + ".incomplete-*"))
+        assert len(backups) == 1 and backups[0].read_bytes() == fragment
     answers = [record for record in _jsonl(dataset) if "messages" in record]
     assert len(answers) == question_count
     assert {record["messages"][0]["content"] for record in answers} == set(questions)

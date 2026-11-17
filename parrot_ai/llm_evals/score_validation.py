@@ -72,3 +72,18 @@ def is_scored_record(record: object) -> bool:
         and ("generation_failure" not in record or is_generation_failure_penalty(record))
         and has_rubric_scores(record.get("evaluation"))
     )
+
+
+def is_missing_answer_penalty(record: object) -> bool:
+    """Recognize local minimum scores without claiming a terminal model failure."""
+    if (not isinstance(record, dict) or "error" in record or "generation_failure" in record
+            or record.get("evaluation_source") != "missing_answer_penalty" or record.get("answer") != ""):
+        return False
+    evaluation = record.get("evaluation")
+    if not isinstance(evaluation, dict):
+        return False
+    language = "arabic" if "Arabic_Accuracy" in evaluation else "english"
+    return evaluation == minimum_rubric_scores(language) and all(
+        type(value) is int for fields in evaluation.values() for key, value in fields.items()
+        if key != "Penalty_Reason"
+    )

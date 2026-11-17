@@ -55,8 +55,9 @@ from parrot_ai.llm_evals import (
     build_rows_order,
 )
 from parrot_ai.llm_evals.master_csv import infer_dataset_metadata
-from parrot_ai.llm_evals.score_validation import is_scored_record, is_generation_failure_penalty, minimum_rubric_scores
+from parrot_ai.llm_evals.score_validation import is_scored_record, is_generation_failure_penalty, is_missing_answer_penalty, minimum_rubric_scores
 from parrot_ai.generation_failures import is_terminal_generation_failure, load_generation_failures
+from parrot_ai.jsonl_checkpoints import recover_jsonl_tail
 from parrot_ai.llm_evals.progress_reporting import emit_progress, BATCH_PENDING_EXIT_CODE
 
 
@@ -83,6 +84,7 @@ def _load_system_prompt(engine: EvaluationEngine, use_system_prompt: bool) -> Op
 def _append_jsonl_record(path: Path, record: dict) -> None:
     """Commit one record before the next paid request, preserving prior bytes."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    recover_jsonl_tail(path)
     with path.open("a+b") as stream:
         stream.seek(0, os.SEEK_END)
         if stream.tell():
@@ -182,7 +184,7 @@ def generate_dataset(
         progress=progress,
         on_result=checkpoint,
     )
-    return str(out_path), responses.aborted
+    return str(out_path), responses.aborted or not out_path.exists()
 
 
 def ensure_csv_structure(
@@ -556,8 +558,12 @@ def _main(argv: List[str]) -> int:
             )
             dataset_path = Path(generated_path)
             if generation_aborted:
+                saved_status = (
+                    f"Completed records saved at {dataset_path}."
+                    if dataset_path.exists() else "No answers were saved."
+                )
                 print(
-                    f"[failed] Generation stopped; successful answers saved at {dataset_path}. "
+                    f"[failed] Generation stopped. {saved_status} "
                     "Rerun to resume; no judge calls made."
                 )
                 return 1
@@ -573,6 +579,7 @@ def _main(argv: List[str]) -> int:
                 dataset_path = candidate
         if not dataset_path.exists():
             raise SystemExit(f"Dataset not found: {dataset_path}")
+        recover_jsonl_tail(dataset_path)
         if not answers_label:
             inferred = infer_answers_label_from_dataset(dataset_path)
             if inferred:
@@ -583,6 +590,8 @@ def _main(argv: List[str]) -> int:
                     "Provide --answers-label (could not infer from dataset)."
                 )
 
+    if generation_mode:
+        recover_jsonl_tail(dataset_path)
     if not system_prompt_label and dataset_path.exists():
         inferred_prompt = infer_system_prompt_label_from_dataset(dataset_path)
         if inferred_prompt:
@@ -777,6 +786,7 @@ def _main(argv: List[str]) -> int:
     existing_results: Dict[str, dict] = {}
     current_answers = dict(pairs)
     if results_jsonl.exists():
+        recover_jsonl_tail(results_jsonl)
         with results_jsonl.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -790,7 +800,8 @@ def _main(argv: List[str]) -> int:
                     continue
                 q = obj.get("question", "")
                 answer = obj.get("answer", "")
-                # Keep result if it has a valid evaluation and the answer wasn't empty
+                # Reuse matching answers or validated local penalties while
+                # the corresponding question is still unanswered.
                 if (
                     isinstance(q, str) and q and is_scored_record(obj)
                     and (
@@ -798,6 +809,8 @@ def _main(argv: List[str]) -> int:
                         or (is_generation_failure_penalty(obj) and current_answers.get(q) == ""
                             and q in generation_failures
                             and obj["generation_failure"] == generation_failures[q]["generation_failure"])
+                        or (is_missing_answer_penalty(obj) and current_answers.get(q) == ""
+                            and q not in generation_failures)
                     )
                 ):
                     existing_results[q] = obj
@@ -837,13 +850,18 @@ def _main(argv: List[str]) -> int:
         )
 
     local_penalties = 0
+    model_failure_penalties = 0
     remaining_pairs = []
     for q, answer in pairs_to_eval:
-        if not answer.strip() and q in generation_failures:
+        if not answer.strip():
             penalty = {
-                "question": q, "answer": "", "generation_failure": generation_failures[q]["generation_failure"],
-                "evaluation_source": "generation_failure_penalty", "evaluation": minimum_rubric_scores(args.language),
+                "question": q, "answer": "", "evaluation_source": "missing_answer_penalty",
+                "evaluation": minimum_rubric_scores(args.language),
             }
+            if q in generation_failures:
+                penalty["generation_failure"] = generation_failures[q]["generation_failure"]
+                penalty["evaluation_source"] = "generation_failure_penalty"
+                model_failure_penalties += 1
             checkpoint_result(penalty)
             existing_results[q] = penalty
             local_penalties += 1
@@ -851,7 +869,8 @@ def _main(argv: List[str]) -> int:
             remaining_pairs.append((q, answer))
     pairs_to_eval = remaining_pairs
     if local_penalties:
-        print(f"[penalty] Recorded {local_penalties} model failures at minimum rubric scores without judge calls; "
+        print(f"[penalty] Scored {local_penalties} blank answers locally at minimum rubric scores "
+              f"({model_failure_penalties} recorded model failures); "
               f"scoring denominator remains {len(pairs)} questions")
 
     reused_scores = len(pairs) - len(pairs_to_eval)
@@ -946,7 +965,7 @@ def _main(argv: List[str]) -> int:
         )
 
     if new_results or local_penalties:
-        print(f"[results] Checkpointed {len(new_results)} judge results and {local_penalties} model-failure penalties -> {results_jsonl}")
+        print(f"[results] Checkpointed {len(new_results)} judge results and {local_penalties} local penalties -> {results_jsonl}")
     else:
         print(f"[results] No new results to append to {results_jsonl}")
     if failed_count:

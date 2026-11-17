@@ -138,6 +138,89 @@ def test_recitation_during_judging_is_an_error_not_an_answer_penalty(tmp_path, m
     assert not is_scored_record(records[0])
 
 
+@pytest.mark.parametrize("execution", ["sync", "batch"])
+@pytest.mark.parametrize("all_missing", [False, True])
+@pytest.mark.parametrize("language", ["english", "arabic"])
+def test_dataset_missing_answers_receive_local_scores_and_resume(tmp_path, monkeypatch, execution, all_missing, language):
+    monkeypatch.chdir(tmp_path)
+    questions = tmp_path / "questions.txt"
+    questions.write_text("q1\nq2\nq3\n")
+    dataset = tmp_path / "answers.jsonl"
+    write_jsonl(dataset, [] if all_missing else [dataset_record("q1")])
+    engine = evaluation.EvaluationEngine(model="gemini-test", language=language, initialize_judge=False)
+    empty_scores = engine.evaluate("missing", "")
+    rubric = {section: {field: 5 if type(value) is int else "" for field, value in fields.items()}
+              for section, fields in minimum_rubric_scores(language).items()}
+    engine.evaluate = Mock(side_effect=lambda q, a: rubric if a else empty_scores)
+    monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
+    client = FakeClient()
+    client.rows = lambda request: {"response": response(json.dumps(rubric))}
+    monkeypatch.setattr(batch, "_new_client", lambda: client)
+    results = tmp_path / "reviews.jsonl"
+    args = ["--mode", "dataset", "--dataset", str(dataset), "--answers-label", "answers",
+            "--judge-model", "gemini-test", "--results-jsonl", str(results), "--language", language,
+            "--questions-file", str(questions), "--limit", "0", "--gemini-execution", execution,
+            "--skip-comparison-csv", "--no-progress"]
+
+    assert cli.main([*args, "--require-complete-answers"]) == 1
+    assert not results.exists()
+    engine.evaluate.assert_not_called()
+    assert not client.uploads
+    assert cli.main(args) == 0
+    records = [json.loads(line) for line in results.read_text().splitlines()]
+    assert len(records) == 3 and all(is_scored_record(row) for row in records)
+    for row in records:
+        assert "generation_failure" not in row
+        if all_missing or row["question"] != "q1":
+            assert row["evaluation"] == empty_scores
+    master = build_master_row(ResultSource(results), repo_root=tmp_path, question_tags={q: {} for q in ("q1", "q2", "q3")})
+    assert master["question_count"] == 3
+    assert master["generation_failure_count"] == master["error_count"] == 0
+    assert engine.evaluate.call_count == int(execution == "sync" and not all_missing)
+    assert sum(len(rows) for rows in client.uploads.values()) == int(execution == "batch" and not all_missing)
+    original = results.read_bytes()
+    assert cli.main(args) == 0
+    assert results.read_bytes() == original
+    assert engine.evaluate.call_count == int(execution == "sync" and not all_missing)
+    assert sum(len(rows) for rows in client.uploads.values()) == int(execution == "batch" and not all_missing)
+
+
+@pytest.mark.parametrize("replacement", ["answer", "terminal_failure"])
+def test_missing_answer_penalty_is_replaced_when_source_outcome_changes(tmp_path, monkeypatch, replacement):
+    monkeypatch.chdir(tmp_path)
+    questions = tmp_path / "questions.txt"
+    questions.write_text("q\n")
+    dataset = tmp_path / "answers.jsonl"
+    dataset.write_text("")
+    results = tmp_path / "reviews.jsonl"
+    engine = evaluation.EvaluationEngine(model="gpt-test", language="english", initialize_judge=False)
+    engine.evaluate = Mock(return_value={"Adherence": {"Core": 4}})
+    monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
+    args = ["--mode", "dataset", "--dataset", str(dataset), "--answers-label", "answers",
+            "--results-jsonl", str(results), "--language", "english", "--questions-file", str(questions),
+            "--limit", "0", "--skip-comparison-csv", "--no-progress"]
+    assert cli.main(args) == 0
+    original = results.read_bytes()
+    engine.evaluate.assert_not_called()
+
+    write_jsonl(dataset, [dataset_record("q", failure=FAILURE if replacement == "terminal_failure" else None)])
+    assert cli.main(args) == 0
+    assert results.read_bytes().startswith(original)
+    records = [json.loads(line) for line in results.read_text().splitlines()]
+    assert len(records) == 2
+    assert records[0]["evaluation_source"] == "missing_answer_penalty"
+    if replacement == "answer":
+        assert records[1]["answer"] and "evaluation_source" not in records[1]
+        assert engine.evaluate.call_count == 1
+    else:
+        assert records[1]["evaluation_source"] == "generation_failure_penalty"
+        assert records[1]["generation_failure"] == FAILURE
+        engine.evaluate.assert_not_called()
+    master = build_master_row(ResultSource(results), repo_root=tmp_path, question_tags={"q": {}})
+    assert master["question_count"] == 1
+    assert master["generation_failure_count"] == int(replacement == "terminal_failure")
+
+
 def test_sync_generation_records_recitation_and_continues(monkeypatch):
     wrapper = Mock()
     wrapper.generate.side_effect = ["answer", TerminalGenerationFailure("RECITATION"), "answer"]

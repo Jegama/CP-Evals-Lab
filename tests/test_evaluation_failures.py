@@ -389,6 +389,62 @@ def test_checkpoint_preserves_unterminated_jsonl_record(tmp_path):
     assert [json.loads(line)["question"] for line in path.read_text().splitlines()] == ["q1", "q2"]
 
 
+@pytest.mark.parametrize("question_count", [1, 2])
+def test_fresh_generation_with_only_retryable_failures_exits_cleanly(tmp_path, monkeypatch, capsys, question_count):
+    engine, _, results = _cli_fixture(tmp_path, monkeypatch, {})
+    questions = tmp_path / "questions.txt"
+    questions.write_text("\n".join(f"q{i}" for i in range(question_count)))
+    dataset = tmp_path / "generated.jsonl"
+    wrapper = Mock(generate=Mock(side_effect=RuntimeError("temporarily unavailable")))
+    monkeypatch.setattr(evaluation_module, "ParrotAIClaude", lambda **kwargs: wrapper)
+    engine.evaluate = Mock(side_effect=AssertionError("No judge calls allowed"))
+
+    assert cli.main([
+        "--mode", "generate-api_evals", "--language", "english", "--limit", "0",
+        "--provider", "anthropic", "--gen-model", "claude-test",
+        "--questions-file", str(questions), "--output-dataset", str(dataset),
+        "--results-jsonl", str(results), "--no-progress",
+    ]) == 1
+    assert wrapper.generate.call_count == question_count
+    engine.evaluate.assert_not_called()
+    assert not dataset.exists() and not results.exists()
+    output = capsys.readouterr().out
+    assert "No answers were saved" in output
+    assert "Dataset ready" not in output
+
+
+@pytest.mark.parametrize("stage", ["generation", "judging"])
+@pytest.mark.parametrize("tail", [b'{"question": "q2",', b'{"question": "\xd8'])
+def test_resume_recovers_partial_checkpoint_before_loading(tmp_path, monkeypatch, stage, tail):
+    from parrot_ai.llm_evals.master_csv import load_jsonl
+
+    engine, args, results = _cli_fixture(tmp_path, monkeypatch, {"q1": "a1", "q2": "a2", "q3": "a3"})
+    dataset = tmp_path / "answers.jsonl"
+    score = {"Adherence": {"Core": 4}}
+    engine.evaluate = Mock(return_value=score)
+    wrapper = Mock(generate=Mock(side_effect=lambda prompt, **kwargs: "a" + prompt[1:]))
+    monkeypatch.setattr(evaluation_module, "ParrotAIClaude", lambda **kwargs: wrapper)
+    if stage == "generation":
+        path = dataset
+        completed = dataset.read_bytes().splitlines(keepends=True)[0]
+        args[args.index("--mode") + 1] = "generate-api_evals"
+        args += ["--provider", "anthropic", "--gen-model", "claude-test", "--output-dataset", str(dataset)]
+    else:
+        path = results
+        completed = (json.dumps({"question": "q1", "answer": "a1", "evaluation": score}) + "\n").encode()
+    path.write_bytes(completed + tail)
+
+    assert cli.main(args) == 0
+    assert path.read_bytes().startswith(completed)
+    assert len(load_jsonl(path)) == 3
+    backups = list(tmp_path.glob(path.name + ".incomplete-*"))
+    assert len(backups) == 1 and backups[0].read_bytes() == tail
+    if stage == "generation":
+        assert [call.kwargs["prompt"] for call in wrapper.generate.call_args_list] == ["q2", "q3"]
+    else:
+        assert [call.args[0] for call in engine.evaluate.call_args_list] == ["q2", "q3"]
+
+
 def test_cli_all_failed_never_reports_success(tmp_path, monkeypatch, capsys):
     engine, args, path = _cli_fixture(tmp_path, monkeypatch, {"q1": "a1", "q2": "a2", "q3": "a3"})
     engine.evaluate = Mock(side_effect=TypeError("bad SDK argument"))

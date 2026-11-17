@@ -380,6 +380,8 @@ Synchronous Gemini generation and judging use a 120-second request timeout and u
 
 The CLI appends and flushes each generated answer and attempted review to disk before issuing the next request, so interruption preserves completed work. Resuming checks saved reviews against the current answer text, shows saved and remaining counts, and starts progress at the saved count (for example, `246/500`, with `246 reused, 254 remaining`). Fully saved stages show `500/500` with zero remaining requests. During judging, every progress label names the judge and answer model, including the first judge in a combined generation/judging operation. Work from older interrupted runs that never reached disk cannot be reconstructed from progress counters.
 
+If interruption or a disk-full error leaves an invalid final JSONL fragment without a newline, the CLI saves that fragment beside the artifact as `<filename>.incomplete-*` before truncating it and resuming. Completed records remain byte-for-byte intact, including a valid final record missing only its newline. Recovery runs before loading datasets/reviews and before appending; a failed quarantine write leaves the source untouched. The unfinished question may need another provider request. Newline-terminated corruption is not automatically repaired.
+
 Run one phase explicitly or override concurrency when useful:
 
 ```bash
