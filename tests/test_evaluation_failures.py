@@ -581,7 +581,7 @@ def test_empty_gemini_output_is_a_failed_evaluation(language, parsed, text):
     engine.language = language
     engine.model = "gemini-3.8-flash"
     engine.seed = 7
-    generate = Mock(return_value=SimpleNamespace(parsed=parsed, text=text))
+    generate = Mock(return_value=SimpleNamespace(parsed=parsed, text=text, candidates=[SimpleNamespace(finish_reason="STOP")]))
     engine.client = SimpleNamespace(models=SimpleNamespace(generate_content=generate))
 
     results = engine.batch_evaluate([("Question", "Answer")] * 10, progress=False)

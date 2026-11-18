@@ -257,6 +257,84 @@ def test_extended_sample_includes_terminal_outcomes(tmp_path, monkeypatch, only_
     assert engine.evaluate.call_count == int(not only_failures)
 
 
+@pytest.mark.parametrize("judge", ["gpt-test", "claude-test", "gemini-test"])
+def test_local_and_reused_reviews_need_no_judge_client(tmp_path, monkeypatch, judge):
+    monkeypatch.chdir(tmp_path)
+    dataset, reviews, questions = (tmp_path / name for name in ("answers.jsonl", "reviews.jsonl", "questions.txt"))
+    write_jsonl(dataset, [dataset_record("blocked", failure=FAILURE), dataset_record("answered")])
+    write_jsonl(reviews, [{"question": "answered", "answer": "Answer in Christ. Ephesians 2:8-9.",
+                           "evaluation": {"Adherence": {"Core": 5}}}])
+    questions.write_text("blocked\nanswered\n")
+    forbidden = Mock(side_effect=AssertionError("No client needed for local or reused reviews"))
+    monkeypatch.setattr(evaluation, "OpenAI", forbidden)
+    monkeypatch.setattr(evaluation.anthropic, "Anthropic", forbidden)
+    monkeypatch.setattr(evaluation.genai, "Client", forbidden)
+    args = ["--mode", "dataset", "--language", "english", "--dataset", str(dataset), "--judge-model", judge,
+            "--results-jsonl", str(reviews), "--questions-file", str(questions), "--limit", "0", "--skip-comparison-csv"]
+    assert cli.main(args) == 0
+    saved = reviews.read_bytes()
+    assert len(saved.splitlines()) == 2
+    assert json.loads(saved.splitlines()[-1])["generation_failure"] == FAILURE
+    assert cli.main(args) == 0 and reviews.read_bytes() == saved
+    forbidden.assert_not_called()
+
+
+def test_extended_resume_keeps_legacy_reviews_and_separates_canonical_results(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    directory = tmp_path / "data/english/training_datasets/evals"
+    directory.mkdir(parents=True)
+    original = directory / "eval_results_answers__judged_by_gpt-5-mini.jsonl"
+    dataset = tmp_path / "answers.jsonl"
+    questions = [f"q{i}" for i in range(503)]
+    write_jsonl(dataset, [dataset_record(q) for q in questions])
+    first = {"mode": "extended", "extended_sample_size": 500, "question": questions[-1],
+             "answer": "Answer in Christ. Ephesians 2:8-9.", "evaluation": {"Adherence": {"Core": 5}}}
+    write_jsonl(original, [first])
+    before = original.read_bytes()
+    engine = evaluation.EvaluationEngine(language="english", initialize_judge=False)
+    engine.evaluate = Mock(return_value=first["evaluation"])
+    monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
+    args = ["--dataset", str(dataset), "--language", "english", "--limit", "0", "--answers-label", "answers",
+            "--skip-comparison-csv", "--no-progress"]
+    assert cli.main(["--mode", "extended", *args]) == 0
+    assert original.read_bytes().startswith(before) and len(original.read_bytes().splitlines()) == 500
+    assert engine.evaluate.call_count == 499
+    saved = original.read_bytes()
+    assert cli.main(["--mode", "extended", *args]) == 0 and original.read_bytes() == saved
+    canonical = tmp_path / "questions.txt"
+    canonical.write_text(questions[-1] + "\n")
+    assert cli.main(["--mode", "dataset", "--questions-file", str(canonical), *args]) == 0
+    assert original.read_bytes() == saved
+    assert len(original.with_stem(original.stem + "__dataset").read_bytes().splitlines()) == 1
+
+
+def test_fresh_extended_run_preserves_other_results_before_sample_publication(tmp_path, monkeypatch):
+    from parrot_ai.llm_evals import extended_sample
+
+    monkeypatch.chdir(tmp_path)
+    directory = tmp_path / "data/english/training_datasets/evals"
+    directory.mkdir(parents=True)
+    canonical = directory / "eval_results_answers__judged_by_gpt-5-mini.jsonl"
+    prior = b'{"mode":"dataset"}\n{"question":"\xd8'
+    canonical.write_bytes(prior)
+    dataset = tmp_path / "answers.jsonl"
+    write_jsonl(dataset, [dataset_record("q")])
+    args = ["--mode", "extended", "--language", "english", "--dataset", str(dataset), "--answers-label", "answers",
+            "--limit", "0", "--skip-comparison-csv", "--no-progress"]
+    engine = evaluation.EvaluationEngine(language="english", initialize_judge=False)
+    engine.evaluate = Mock(return_value={"Adherence": {"Core": 5}})
+    monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
+    with monkeypatch.context() as patch:
+        patch.setattr(extended_sample.os, "link", Mock(side_effect=OSError("disk full")))
+        with pytest.raises(OSError, match="disk full"):
+            cli.main(args)
+    engine.evaluate.assert_not_called()
+    assert list(directory.iterdir()) == [canonical]
+    assert cli.main(args) == 0
+    assert canonical.read_bytes() == prior
+    assert canonical.with_stem(canonical.stem + "__extended").is_file()
+
+
 def test_master_export_follows_restored_answers_even_when_replacement_judging_fails(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     dataset = tmp_path / "answers.jsonl"

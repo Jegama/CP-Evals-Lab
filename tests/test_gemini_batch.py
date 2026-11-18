@@ -2,6 +2,7 @@
 
 import json
 import os
+import random
 from pathlib import Path
 import signal
 import subprocess
@@ -18,6 +19,7 @@ from parrot_ai import gemini_batch as batch
 from parrot_ai.evaluation_schemas import EvaluationResultEnglish
 from parrot_ai.llm_evaluation import EvaluationEngine
 from parrot_ai.llm_evals.gemini_batch_adapter import generate_gemini_batch, judge_gemini_batch
+from parrot_ai.llm_evals.master_csv import ResultSource, build_master_row
 
 
 def response(text="answer"):
@@ -87,6 +89,94 @@ def test_download_and_reimport_use_keys_and_no_new_paid_job(tmp_path):
     assert saved == {key: request["contents"][0]["parts"][0]["text"] for key, request in wanted.items()}
     batch.run_batch(**kwargs)
     assert client.batches.create.call_count == client.files.download.call_count == 1
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_smaller_limit_cannot_unlock_sync_for_cached_keys(tmp_path, monkeypatch, legacy):
+    monkeypatch.chdir(tmp_path)
+    client = FakeClient()
+    monkeypatch.setattr(batch, "_new_client", lambda: client)
+    dataset, questions = tmp_path / "answers.jsonl", tmp_path / "questions.txt"
+    questions.write_text("\n".join(f"q{i}" for i in range(500)))
+    args = ["--mode", "generate-api_evals", "--generate-only", "--language", "english", "--no-progress",
+            "--provider", "google", "--gen-model", "gemini-test", "--questions-file", str(questions),
+            "--output-dataset", str(dataset)]
+    batch_args = [*args, "--gemini-execution", "batch", "--gemini-batch-no-wait"]
+    client.batches.get.side_effect = lambda **kwargs: types.BatchJob(name="batches/0", state="JOB_STATE_PENDING")
+    assert cli.main([*batch_args, "--limit", "0"]) == 75
+    client.batches.get.side_effect = client.get
+    assert cli.main([*batch_args, "--limit", "100"]) == 0
+    prefix = dataset.read_bytes()
+    assert len(prefix.splitlines()) == 100
+    if legacy:
+        path, = batch.state_directory(dataset).glob("*.job.json")
+        manifest = json.loads(path.read_text())
+        manifest.pop("unconsumed_keys", None)
+        manifest["phase"] = "imported"
+        path.write_text(json.dumps(manifest))
+    with pytest.raises(RuntimeError, match="resume with --gemini-execution batch"):
+        cli.main([*args, "--limit", "0", "--gemini-execution", "sync"])
+    assert cli.main([*batch_args, "--limit", "200"]) == 0
+    with pytest.raises(RuntimeError, match="resume with --gemini-execution batch"):
+        batch.ensure_no_pending_batch(dataset)
+    assert cli.main([*batch_args, "--limit", "0"]) == 0
+    assert dataset.read_bytes().startswith(prefix) and len(dataset.read_bytes().splitlines()) == 500
+    batch.ensure_no_pending_batch(dataset)
+    client.models.generate_content.assert_not_called()
+    assert client.batches.create.call_count == client.files.download.call_count == 1
+
+
+def test_null_content_retries_only_empty_batch_item(tmp_path, monkeypatch):
+    client = FakeClient()
+    client.rows = lambda req: {"response": ({"candidates": [{"finishReason": "STOP", "content": None}]}
+                                          if req["contents"][0]["parts"][0]["text"] == "bad" else response())}
+    monkeypatch.setattr(batch, "_new_client", lambda: client)
+    engine = EvaluationEngine(language="english", initialize_judge=False)
+    results = generate_gemini_batch(engine, ["bad", "good"], model="gemini-test", artifact=tmp_path / "answers.jsonl",
+                                    sync_fallback_max=1)
+    assert not results.aborted
+    assert {row["question"]: row["execution_mode"] for row in results} == {"bad": "sync_fallback", "good": "batch"}
+    assert client.models.generate_content.call_count == client.batches.create.call_count == 1
+
+
+@pytest.mark.parametrize("legacy_pending_job", [False, True])
+def test_extended_polls_keep_original_sample_and_export(tmp_path, monkeypatch, legacy_pending_job):
+    monkeypatch.chdir(tmp_path)
+    dataset, reviews = tmp_path / "answers.jsonl", tmp_path / "reviews.jsonl"
+    questions = [f"question {i}" for i in range(501)]
+    dataset.write_text("".join(json.dumps({"messages": [{"role": "user", "content": q},
+                                                        {"role": "assistant", "content": "answer"}]}) + "\n"
+                               for q in questions))
+    client = FakeClient()
+    monkeypatch.setattr(batch, "_new_client", lambda: client)
+    rubric = {section: {name: 4 for name, field in model.annotation.model_fields.items() if field.is_required()}
+              for section, model in EvaluationResultEnglish.model_fields.items()}
+    client.rows = lambda req: {"response": response(json.dumps(rubric))}
+    args = ["--mode", "extended", "--language", "english", "--limit", "0", "--no-progress", "--skip-comparison-csv",
+            "--dataset", str(dataset), "--answers-label", "test", "--results-jsonl", str(reviews),
+            "--judge-model", "gemini-test", "--gemini-execution", "batch", "--gemini-batch-no-wait"]
+    monkeypatch.setattr(random, "sample", lambda population, k: list(population)[:k])
+    sample_path = reviews.with_name(reviews.name + ".sample.json")
+    def create_with_saved_sample(**kwargs):
+        assert json.loads(sample_path.read_text()) == questions[:500]
+        return client.create(**kwargs)
+    client.batches.create.side_effect = create_with_saved_sample
+    client.batches.get.side_effect = lambda **kwargs: types.BatchJob(name="batches/0", state="JOB_STATE_PENDING")
+    assert cli.main(args) == 75
+    if legacy_pending_job:
+        sample_path.unlink()
+    # A new draw would now drop the first question and add the 501st.
+    monkeypatch.setattr(random, "sample", lambda population, k: list(population)[-k:])
+    client.batches.get.side_effect = client.get
+    assert cli.main(args) == 0
+    records = [json.loads(line) for line in reviews.read_text().splitlines()]
+    assert {r["question"] for r in records} == set(questions[:500])
+    assert client.batches.create.call_count == 1
+    # A legacy result file may already contain scores from a second sample.
+    with reviews.open("a") as stream:
+        stream.write(json.dumps({**records[0], "question": questions[-1]}) + "\n")
+    assert build_master_row(ResultSource(reviews), repo_root=tmp_path)["question_count"] == 500
+    assert cli.main(args) == 0 and client.batches.create.call_count == 1
 
 
 @pytest.mark.parametrize("error", [ConnectionError("offline"), KeyboardInterrupt()])

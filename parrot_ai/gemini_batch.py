@@ -15,7 +15,7 @@ from google import genai
 from google.genai import types
 
 from .gemini_transport import gemini_http_options
-from .generation_failures import require_complete_gemini_answer
+from .generation_failures import TerminalGenerationFailure, require_complete_gemini_answer
 
 
 TERMINAL_STATES = {
@@ -32,16 +32,48 @@ def ensure_no_pending_batch(artifact: Path) -> None:
     reconcile_checkpointed_batches(artifact, require_finished=True)
 
 
-def _saved_request_keys(artifact: Path) -> set[str]:
+def _saved_request_keys(artifact: Path, *, attempted_job: str | None = None) -> set[str]:
     keys = set()
+    if not artifact.is_file():
+        return keys
     with artifact.open(encoding="utf-8") as stream:
         for line in stream:
             if not line.strip():
                 continue
             row = json.loads(line)
-            if isinstance(row, dict) and "error" not in row and isinstance(row.get("request_key"), str):
+            if not isinstance(row, dict) or not isinstance(row.get("request_key"), str):
+                continue
+            if "error" not in row or (attempted_job is not None and row.get("batch_job") == attempted_job):
                 keys.add(row["request_key"])
     return keys
+
+
+def _unconsumed_keys(path: Path, manifest: dict, artifact: Path) -> set[str]:
+    if "unconsumed_keys" in manifest:
+        return set(manifest["unconsumed_keys"])
+    if manifest["phase"] != "imported":
+        return set(manifest["keys"])
+    # Older importers marked the whole job imported even on a limited run.
+    # Only cached answers and terminal outcomes could avoid a fresh request.
+    cached = set()
+    unseen = set(manifest["keys"]) - _saved_request_keys(artifact, attempted_job=manifest.get("job_name"))
+    output = path.with_suffix(".responses.jsonl")
+    if unseen and output.is_file():
+        with output.open(encoding="utf-8") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if row.get("error") or row.get("key") not in unseen:
+                    continue
+                try:
+                    response_text(row.get("response") or {})
+                except TerminalGenerationFailure:
+                    pass
+                except (ValueError, KeyError, TypeError):
+                    continue
+                cached.add(row["key"])
+    return cached
 
 
 def reconcile_checkpointed_batches(artifact: Path, *, require_finished: bool = False) -> None:
@@ -53,15 +85,22 @@ def reconcile_checkpointed_batches(artifact: Path, *, require_finished: bool = F
         saved_keys = None
         for path in directory.glob("*.job.json"):
             manifest = json.loads(path.read_text())
-            if manifest["phase"] in ("imported", "rejected", "abandoned"):
+            phase = manifest["phase"]
+            if phase in ("rejected", "abandoned") or (phase == "imported" and manifest.get("unconsumed_keys") == []):
                 continue
-            if (manifest["phase"] == "submitted" and manifest.get("remote_state") in TERMINAL_STATES
-                    and path.with_suffix(".responses.jsonl").is_file() and artifact.is_file()):
-                if saved_keys is None:
-                    saved_keys = _saved_request_keys(artifact)
-                if saved_keys.issuperset(manifest["keys"]):
-                    manifest["phase"] = "imported"
+            if phase in ("imported", "partially_imported") or (
+                phase == "submitted" and manifest.get("remote_state") in TERMINAL_STATES
+                and path.with_suffix(".responses.jsonl").is_file()
+            ):
+                remaining = _unconsumed_keys(path, manifest, artifact)
+                if remaining:
+                    if saved_keys is None:
+                        saved_keys = _saved_request_keys(artifact)
+                    remaining.difference_update(saved_keys)
+                if not remaining or phase == "imported":
+                    manifest.update(phase="partially_imported" if remaining else "imported", unconsumed_keys=sorted(remaining))
                     _save(path, manifest)
+                if not remaining:
                     continue
             if require_finished:
                 raise RuntimeError(f"An unfinished Gemini batch exists at {path}; resume with --gemini-execution batch")
@@ -130,8 +169,9 @@ def response_text(response: dict) -> str:
     candidate = candidates[0]
     reason = candidate.get("finishReason", candidate.get("finish_reason"))
     require_complete_gemini_answer(reason)
+    content = candidate.get("content") or {}
     text = "".join(
-        part.get("text", "") for part in candidate.get("content", {}).get("parts", [])
+        part.get("text", "") for part in (content.get("parts") or [])
         if not part.get("thought")
     )
     if not text.strip():
@@ -180,7 +220,6 @@ def run_batch(
         interested = pending.intersection(manifest["keys"])
         if not interested or manifest["phase"] in ("rejected", "abandoned"):
             return True
-        replay = manifest["phase"] == "imported"
         output_path = manifest_path.with_suffix(".responses.jsonl")
         if not output_path.exists():
             if manifest["phase"] == "submitting":
@@ -272,6 +311,7 @@ def run_batch(
             if key not in manifest["keys"] or key in rows:
                 raise ValueError(f"Unexpected or duplicate batch response key: {key}")
             rows[key] = row
+        unconsumed = _unconsumed_keys(manifest_path, manifest, artifact)
         for key in manifest["keys"]:
             if key not in interested:
                 continue
@@ -279,13 +319,17 @@ def run_batch(
                 "message": f"No result for request; {manifest.get('remote_state')}: {manifest.get('remote_error', '')}",
             }})
             row = {**row, "batch_job": manifest.get("job_name")}
+            replay = key not in unconsumed
             if consume(key, row, replay):
                 pending.discard(key)
             else:
                 failed[key] = row
             if not replay:
                 attempted.add(key)
-        manifest["phase"] = "imported"
+        remaining = unconsumed - interested
+        if remaining:
+            remaining.difference_update(_saved_request_keys(artifact))
+        manifest.update(phase="partially_imported" if remaining else "imported", unconsumed_keys=sorted(remaining))
         _save(manifest_path, manifest)
         return True
 
@@ -353,7 +397,7 @@ def run_batch(
                 if len(content) > 2_000_000_000:
                     raise ValueError("Gemini batch input exceeds the 2GB file limit")
                 _atomic_bytes(path.with_suffix(".requests.jsonl"), content)
-                manifest = {"version": 1, "model": model, "keys": remaining,
+                manifest = {"version": 2, "model": model, "keys": remaining,
                             "display_name": f"cp-evals-{identifier}", "phase": "prepared"}
                 _save(path, manifest)
                 retrieve(path, manifest)

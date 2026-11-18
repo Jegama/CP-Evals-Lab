@@ -230,3 +230,18 @@ def test_sync_judge_recitation_stays_an_evaluation_error(gemini_transport):
     assert "RECITATION" in results[0]["error"]
     assert "generation_failure" not in results[0]
     assert "evaluation" not in results[0]
+
+
+@pytest.mark.parametrize("reason", ["MAX_TOKENS", "SAFETY", None])
+def test_sync_judge_retries_parseable_nonstop_review(gemini_transport, reason):
+    requests, reply = gemini_transport
+    rubric = {section: {name: 4 for name, field in model.annotation.model_fields.items() if field.is_required()}
+              for section, model in EvaluationResultEnglish.model_fields.items()}
+    reply.update(text=json.dumps(rubric), finish_reason=reason)
+    engine = EvaluationEngine(model="gemini-test", language="english")
+    pairs = [("Question", "Answer")]
+    rejected, = engine.batch_evaluate(pairs, progress=False)
+    assert "error" in rejected and "evaluation" not in rejected and "generation_failure" not in rejected
+    reply["finish_reason"] = "STOP"
+    accepted, = engine.batch_evaluate(pairs, progress=False)
+    assert "evaluation" in accepted and len(requests) == 2

@@ -5,6 +5,22 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 
 
+def load_jsonl(path: Path) -> list[dict]:
+    records: list[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                item = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON in {path}:{line_number}: {exc}") from exc
+            if isinstance(item, dict):
+                records.append(item)
+    return records
+
+
 def load_qa_pairs(
     jsonl_path: str,
     question_list_path: Optional[str] = "data/arabic/ar_eval_questions.txt",

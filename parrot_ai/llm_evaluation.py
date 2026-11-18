@@ -163,8 +163,9 @@ class EvaluationEngine:
                 config=cfg,
             )
             candidates = getattr(resp, "candidates", None) or []
-            if candidates and getattr(candidates[0], "finish_reason", None) == "RECITATION":
-                raise ValueError("Gemini judge output blocked: RECITATION")
+            reason = candidates[0].finish_reason if candidates else None
+            if reason != "STOP":
+                raise ValueError(f"Gemini judge output did not finish successfully: {reason}")
             # Prefer structured parsed output; fallback to parsing JSON text
             result_dict: dict
             parsed_obj = getattr(resp, "parsed", None)

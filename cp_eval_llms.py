@@ -38,8 +38,6 @@ import csv
 import json
 import re
 import sys
-import random
-import math
 import importlib
 import os
 from datetime import datetime as dt
@@ -56,6 +54,7 @@ from parrot_ai.llm_evals import (
 )
 from parrot_ai.llm_evals.master_csv import infer_dataset_metadata
 from parrot_ai.llm_evals.data_loading import load_saved_answers
+from parrot_ai.llm_evals.extended_sample import default_extended_results, extended_sample_path, select_extended_questions
 from parrot_ai.llm_evals.score_validation import is_scored_record, minimum_rubric_scores, review_matches_outcome
 from parrot_ai.generation_failures import is_terminal_generation_failure, load_generation_failures
 from parrot_ai.jsonl_checkpoints import recover_jsonl_tail
@@ -511,7 +510,7 @@ def _main(argv: List[str]) -> int:
 
     engine = EvaluationEngine(
         model=args.judge_model, language=args.language,
-        initialize_judge=not (args.generate_only or batch_judge),
+        initialize_judge=False,
     )
     if not args.generate_only:
         print(f"[init] Judge model: {args.judge_model}")
@@ -613,21 +612,24 @@ def _main(argv: List[str]) -> int:
     if not answers_label:
         answers_label = "answers"
 
+    results_name = Path(args.results_jsonl or f"eval_results_{sanitize_filename(answers_label)}__judged_by_{sanitize_filename(args.judge_model)}.jsonl")
+    results_jsonl = results_name if results_name.is_absolute() else default_comp_csv.parent / results_name.name
+    if not args.results_jsonl and args.mode == "extended":
+        results_jsonl = default_extended_results(results_jsonl)
+    if not args.generate_only and args.mode != "extended" and extended_sample_path(results_jsonl).exists():
+        if args.results_jsonl:
+            raise ValueError(f"{results_jsonl} belongs to a saved extended sample. Choose a separate --results-jsonl.")
+        results_jsonl = results_jsonl.with_stem(results_jsonl.stem + "__" + args.mode)
+
     if args.mode == "extended":
         # Extended mode: random sample of questions directly from dataset
         for question in generation_failures:
             q_to_a.setdefault(question, "")
         if not q_to_a:
             raise SystemExit("Dataset appears empty or unreadable for extended mode.")
-        total_q = len(q_to_a)
-        sample_target = max(500, math.ceil(0.10 * total_q))
-        if sample_target > total_q:
-            sample_target = total_q
-        sample_questions = random.sample(list(q_to_a.keys()), sample_target)
+        sample_questions = select_extended_questions(results_jsonl, q_to_a, engine)
         pairs = [(q, q_to_a[q]) for q in sample_questions]
-        print(
-            f"[extended] Selected random sample of {len(pairs)} questions (total available: {total_q}; target rule: max(500,10%={math.ceil(0.10 * total_q)}))"
-        )
+        print(f"[extended] Using {len(pairs)} sampled questions from {len(q_to_a)} available.")
     elif generation_mode:
         # Resume generation before judging the canonical questions.
         limit_val = None if args.limit == 0 else args.limit
@@ -722,25 +724,6 @@ def _main(argv: List[str]) -> int:
         print(f"[done] Generation complete: {len(pairs) - failure_count} answers and {failure_count} recorded model failures; "
               f"{len(pairs)}/{len(pairs)} questions accounted for at {dataset_path}.")
         return 0
-
-    # Results JSONL placement (mode dependent) -- resolve path BEFORE evaluation
-    if args.mode in ("dataset", "extended"):
-        default_results_dir = training_evals_dir
-    elif args.mode == "generate-ft_evals":
-        default_results_dir = ft_evals_dir
-    else:  # generate-api_evals
-        default_results_dir = api_evals_dir
-
-    default_results_dir.mkdir(parents=True, exist_ok=True)
-    if args.results_jsonl:
-        supplied = Path(args.results_jsonl)
-        if supplied.is_absolute():
-            results_jsonl = supplied
-        else:
-            results_jsonl = default_results_dir / supplied.name
-    else:
-        filename = f"eval_results_{sanitize_filename(answers_label)}__judged_by_{sanitize_filename(args.judge_model)}.jsonl"
-        results_jsonl = default_results_dir / filename
 
     # Load existing eval results for incremental evaluation
     existing_results: Dict[str, dict] = {}
@@ -841,6 +824,7 @@ def _main(argv: List[str]) -> int:
             if args.judge_model.startswith("gemini"):
                 from parrot_ai.gemini_batch import ensure_no_pending_batch
                 ensure_no_pending_batch(results_jsonl)
+            engine = EvaluationEngine(model=args.judge_model, language=args.language, initialize_judge=True)
             new_results = engine.batch_evaluate(
                 pairs_to_eval, limit=None, progress=not args.no_progress,
                 on_result=checkpoint_result,

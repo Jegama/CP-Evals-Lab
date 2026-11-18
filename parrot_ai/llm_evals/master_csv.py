@@ -14,7 +14,8 @@ from zoneinfo import ZoneInfo
 
 from ..generation_failures import load_generation_failures
 from .aggregation import aggregate_score_statistics, score_metric_order
-from .data_loading import load_saved_answers
+from .data_loading import load_jsonl, load_saved_answers
+from .extended_sample import load_extended_sample
 from .score_validation import is_scored_record, is_generation_failure_penalty, review_matches_outcome
 
 
@@ -42,22 +43,6 @@ class ResultSource:
 
     path: Path
     eval_version: str = "v2"
-
-
-def load_jsonl(path: Path) -> list[dict]:
-    records: list[dict] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                item = json.loads(stripped)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"Invalid JSON in {path}:{line_number}: {exc}") from exc
-            if isinstance(item, dict):
-                records.append(item)
-    return records
 
 
 def load_question_tags(path: Optional[Path]) -> dict[str, dict]:
@@ -270,10 +255,15 @@ def build_master_row(
         raise FileNotFoundError(f"Evaluation results not found: {results_path}")
 
     all_records = load_jsonl(results_path)
-    dataset_path = _resolve_repo_path(
-        _last_metadata_value(all_records, "dataset"), repo_root
-    )
-    results = _deduplicate_evaluations(all_records, dataset_path)
+    sampled_records = all_records
+    sample = load_extended_sample(results_path)
+    if sample is not None:
+        selected = set(sample)
+        sampled_records = [record for record in all_records
+                           if isinstance(record.get("question"), str) and record["question"] in selected]
+    metadata_records = sampled_records or all_records
+    dataset_path = _resolve_repo_path(_last_metadata_value(metadata_records, "dataset"), repo_root)
+    results = _deduplicate_evaluations(sampled_records, dataset_path)
     # A previously scored run may now have zero matching reviews. Export its
     # zero coverage so a rebuild clears stale metrics from the existing CSV.
     if not results and not any(
@@ -283,23 +273,23 @@ def build_master_row(
         raise ValueError(f"No valid evaluations found in {results_path}")
     dataset_metadata = infer_dataset_metadata(dataset_path)
 
-    provider = _last_metadata_value(all_records, "provider") or dataset_metadata.get(
+    provider = _last_metadata_value(metadata_records, "provider") or dataset_metadata.get(
         "provider", ""
     )
-    gen_model = _last_metadata_value(all_records, "gen_model") or dataset_metadata.get(
+    gen_model = _last_metadata_value(metadata_records, "gen_model") or dataset_metadata.get(
         "gen_model", ""
     )
     system_prompt_label = _last_metadata_value(
-        all_records, "system_prompt_label"
+        metadata_records, "system_prompt_label"
     ) or dataset_metadata.get("system_prompt_label", "")
-    judge_model = str(_last_metadata_value(all_records, "judge_model") or "")
+    judge_model = str(_last_metadata_value(metadata_records, "judge_model") or "")
     answers_label = infer_answers_label(
-        _last_metadata_value(all_records, "answers_label"),
+        _last_metadata_value(metadata_records, "answers_label"),
         dataset_path,
         provider,
     )
     evaluated_at, timestamp_source = infer_evaluated_at(
-        all_records,
+        metadata_records,
         results_path,
         repo_root,
         timezone_name,
@@ -310,7 +300,7 @@ def build_master_row(
         include_arabic_accuracy=language == "arabic",
         question_tags=question_tags,
     )
-    error_count = sum(1 for record in all_records if "error" in record)
+    error_count = sum(1 for record in sampled_records if "error" in record)
     run_identity = "|".join(
         [
             answers_label,
