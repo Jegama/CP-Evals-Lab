@@ -44,7 +44,7 @@ import importlib
 import os
 from datetime import datetime as dt
 from pathlib import Path
-from typing import Dict, List, Tuple, Set, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 from parrot_ai.llm_evaluation import (
     EvaluationEngine,
     load_qa_pairs,
@@ -55,7 +55,8 @@ from parrot_ai.llm_evals import (
     build_rows_order,
 )
 from parrot_ai.llm_evals.master_csv import infer_dataset_metadata
-from parrot_ai.llm_evals.score_validation import is_scored_record, is_generation_failure_penalty, is_missing_answer_penalty, minimum_rubric_scores
+from parrot_ai.llm_evals.data_loading import load_saved_answers
+from parrot_ai.llm_evals.score_validation import is_scored_record, minimum_rubric_scores, review_matches_outcome
 from parrot_ai.generation_failures import is_terminal_generation_failure, load_generation_failures
 from parrot_ai.jsonl_checkpoints import recover_jsonl_tail
 from parrot_ai.llm_evals.progress_reporting import emit_progress, BATCH_PENDING_EXIT_CODE
@@ -567,7 +568,7 @@ def _main(argv: List[str]) -> int:
                     "Rerun to resume; no judge calls made."
                 )
                 return 1
-            print(f"[generate] Dataset ready at {dataset_path}")
+            print(f"[generate] Dataset checkpoint at {dataset_path}")
     else:  # MODE: dataset
         if not args.dataset:
             raise SystemExit("--dataset required for dataset mode")
@@ -599,6 +600,7 @@ def _main(argv: List[str]) -> int:
             print(f"[infer] Using inferred system prompt label: {system_prompt_label}")
 
     dataset_metadata = infer_dataset_metadata(dataset_path)
+    q_to_a = load_saved_answers(dataset_path)
     generation_failures = load_generation_failures(dataset_path)
     effective_gen_model = args.gen_model or dataset_metadata.get("gen_model")
     effective_provider = args.provider or dataset_metadata.get("provider")
@@ -613,17 +615,10 @@ def _main(argv: List[str]) -> int:
 
     if args.mode == "extended":
         # Extended mode: random sample of questions directly from dataset
-        raw_pairs = load_qa_pairs(
-            str(dataset_path),
-            question_list_path=None,
-            limit=0,
-        )
-        if not raw_pairs:
+        for question in generation_failures:
+            q_to_a.setdefault(question, "")
+        if not q_to_a:
             raise SystemExit("Dataset appears empty or unreadable for extended mode.")
-        q_to_a: Dict[str, str] = {}
-        for q, a in raw_pairs:
-            if q not in q_to_a:
-                q_to_a[q] = a
         total_q = len(q_to_a)
         sample_target = max(500, math.ceil(0.10 * total_q))
         if sample_target > total_q:
@@ -634,22 +629,13 @@ def _main(argv: List[str]) -> int:
             f"[extended] Selected random sample of {len(pairs)} questions (total available: {total_q}; target rule: max(500,10%={math.ceil(0.10 * total_q)}))"
         )
     elif generation_mode:
-        # Generation evaluation: use question list; penalize missing answers by inserting empty answer strings
+        # Resume generation before judging the canonical questions.
         limit_val = None if args.limit == 0 else args.limit
         eval_questions = load_eval_questions(questions_file, limit=limit_val)
         if not eval_questions:
             raise SystemExit(
                 "Questions file empty or unreadable for generation evaluation."
             )
-        raw_pairs = load_qa_pairs(
-            str(dataset_path),
-            question_list_path=None,
-            limit=0,
-        )
-        q_to_a: Dict[str, str] = {}
-        for q, a in raw_pairs:
-            if q not in q_to_a:
-                q_to_a[q] = a
         terminal_questions = {q for q in eval_questions if q in generation_failures and not q_to_a.get(q, "").strip()}
         missing_questions = [q for q in eval_questions if not q_to_a.get(q, "").strip() and q not in terminal_questions]
         reused_answers = len(eval_questions) - len(missing_questions) - len(terminal_questions)
@@ -693,19 +679,11 @@ def _main(argv: List[str]) -> int:
                     "Rerun to resume; no judge calls made."
                 )
                 return 1
+        elif args.provider == "google":
+            from parrot_ai.gemini_batch import reconcile_checkpointed_batches
+            reconcile_checkpointed_batches(dataset_path)
 
-        missing = 0
-        pairs: List[Tuple[str, str]] = []
-        for q in eval_questions:
-            if q in q_to_a:
-                pairs.append((q, q_to_a[q]))
-            else:
-                missing += 1
-                pairs.append(
-                    (q, "")
-                )  # Placeholder blank answer -> evaluation engine will penalize
-        if missing:
-            print(f"[generate-eval] {missing} unanswered questions retained in the scoring denominator.")
+        pairs = [(q, q_to_a.get(q, "")) for q in eval_questions]
         print(
             f"[generate-eval] Prepared {len(pairs)} question/answer pairs for evaluation."
         )
@@ -713,31 +691,13 @@ def _main(argv: List[str]) -> int:
         # Standard dataset mode: strict curated list (default 100)
         limit_val = None if args.limit == 0 else args.limit
         eval_questions = load_eval_questions(questions_file, limit=limit_val)
-        eval_set: Set[str] = set(eval_questions)
         if args.limit == 100 and len(eval_questions) != 100:
             raise SystemExit(
                 f"Evaluation questions file must contain 100 questions (got {len(eval_questions)})."
             )
 
-        raw_pairs = load_qa_pairs(
-            str(dataset_path),
-            question_list_path=None,
-            limit=0,
-        )
-        q_to_a: Dict[str, str] = {}
-        for q, a in raw_pairs:
-            if q in eval_set and q not in q_to_a:
-                q_to_a[q] = a
-        
-        missing_count = 0
-        pairs: List[Tuple[str, str]] = []
-        for q in eval_questions:
-            if q in q_to_a:
-                pairs.append((q, q_to_a[q]))
-            else:
-                missing_count += 1
-                pairs.append((q, ""))  # Empty answer triggers penalty
-        
+        pairs = [(q, q_to_a.get(q, "")) for q in eval_questions]
+        missing_count = sum(not answer for _, answer in pairs)
         if missing_count:
             print(f"[dataset] {missing_count} unanswered questions retained in the scoring denominator.")
         else:
@@ -748,7 +708,7 @@ def _main(argv: List[str]) -> int:
     if not pairs:
         print("[failed] No question/answer pairs available for evaluation.")
         return 1
-    if args.require_complete_answers or args.generate_only:
+    if generation_mode or args.require_complete_answers:
         missing_answers = sum(not answer.strip() and q not in generation_failures for q, answer in pairs)
         if missing_answers:
             print(
@@ -799,19 +759,8 @@ def _main(argv: List[str]) -> int:
                 if not isinstance(obj, dict):
                     continue
                 q = obj.get("question", "")
-                answer = obj.get("answer", "")
-                # Reuse matching answers or validated local penalties while
-                # the corresponding question is still unanswered.
-                if (
-                    isinstance(q, str) and q and is_scored_record(obj)
-                    and (
-                        (isinstance(answer, str) and answer.strip() and answer == current_answers.get(q))
-                        or (is_generation_failure_penalty(obj) and current_answers.get(q) == ""
-                            and q in generation_failures
-                            and obj["generation_failure"] == generation_failures[q]["generation_failure"])
-                        or (is_missing_answer_penalty(obj) and current_answers.get(q) == ""
-                            and q not in generation_failures)
-                    )
+                if isinstance(q, str) and q in current_answers and review_matches_outcome(
+                    obj, current_answers[q], generation_failures.get(q)
                 ):
                     existing_results[q] = obj
         print(f"[eval] Found {len(existing_results)} existing evaluations in {results_jsonl}")
@@ -900,6 +849,9 @@ def _main(argv: List[str]) -> int:
         print("[eval] Done.")
     else:
         new_results = []
+        if args.judge_model.startswith("gemini"):
+            from parrot_ai.gemini_batch import reconcile_checkpointed_batches
+            reconcile_checkpointed_batches(results_jsonl)
         print("[eval] All pairs already evaluated, skipping evaluation.")
 
     # Merge: existing results + new results, rebuild full list in pairs order

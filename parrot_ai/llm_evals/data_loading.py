@@ -1,6 +1,7 @@
 """Data loading utilities for evaluation QA pairs and question lists."""
 
 import json
+from pathlib import Path
 from typing import List, Tuple, Optional
 
 
@@ -81,6 +82,14 @@ def load_qa_pairs(
     if question_set is None and limit and limit > 0:
         pairs = pairs[:limit]
     return pairs
+
+
+def load_saved_answers(dataset_path: Path) -> dict[str, str]:
+    """Use the first valid answer for each question in checkpoint order."""
+    answers = {}
+    for question, answer in load_qa_pairs(str(dataset_path), question_list_path=None, limit=0):
+        answers.setdefault(question, answer)
+    return answers
 
 
 def load_eval_questions(

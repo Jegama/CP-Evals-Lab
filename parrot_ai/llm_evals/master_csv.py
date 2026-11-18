@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence
 from zoneinfo import ZoneInfo
 
+from ..generation_failures import load_generation_failures
 from .aggregation import aggregate_score_statistics, score_metric_order
-from .score_validation import is_scored_record, is_generation_failure_penalty
+from .data_loading import load_saved_answers
+from .score_validation import is_scored_record, is_generation_failure_penalty, review_matches_outcome
 
 
 MASTER_METADATA_COLUMNS = [
@@ -227,9 +229,11 @@ def infer_evaluated_at(
     return modified.isoformat(), "filesystem_mtime"
 
 
-def _deduplicate_evaluations(records: Sequence[dict]) -> list[dict]:
-    """Keep the latest valid evaluation for each question, preserving order."""
+def _deduplicate_evaluations(records: Sequence[dict], dataset_path: Optional[Path]) -> list[dict]:
+    """Keep the latest applicable review, preserving first-seen question order."""
 
+    answers = load_saved_answers(dataset_path) if dataset_path is not None else None
+    failures = load_generation_failures(dataset_path) if dataset_path is not None else {}
     by_question: dict[str, dict] = {}
     order: list[str] = []
     seen_questions: set[str] = set()
@@ -240,7 +244,12 @@ def _deduplicate_evaluations(records: Sequence[dict]) -> list[dict]:
         if question not in seen_questions:
             seen_questions.add(question)
             order.append(question)
-        if is_scored_record(record):
+        if answers is None:
+            # Historical stand-alone result files may have no dataset reference.
+            valid = is_scored_record(record)
+        else:
+            valid = review_matches_outcome(record, answers.get(question, ""), failures.get(question))
+        if valid:
             by_question[question] = record
     return [by_question[question] for question in order if question in by_question]
 
@@ -261,13 +270,17 @@ def build_master_row(
         raise FileNotFoundError(f"Evaluation results not found: {results_path}")
 
     all_records = load_jsonl(results_path)
-    results = _deduplicate_evaluations(all_records)
-    if not results:
-        raise ValueError(f"No valid evaluations found in {results_path}")
-
     dataset_path = _resolve_repo_path(
         _last_metadata_value(all_records, "dataset"), repo_root
     )
+    results = _deduplicate_evaluations(all_records, dataset_path)
+    # A previously scored run may now have zero matching reviews. Export its
+    # zero coverage so a rebuild clears stale metrics from the existing CSV.
+    if not results and not any(
+        isinstance(row.get("question"), str) and row["question"] and is_scored_record(row)
+        for row in all_records
+    ):
+        raise ValueError(f"No valid evaluations found in {results_path}")
     dataset_metadata = infer_dataset_metadata(dataset_path)
 
     provider = _last_metadata_value(all_records, "provider") or dataset_metadata.get(

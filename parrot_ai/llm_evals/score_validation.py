@@ -77,7 +77,8 @@ def is_scored_record(record: object) -> bool:
 def is_missing_answer_penalty(record: object) -> bool:
     """Recognize local minimum scores without claiming a terminal model failure."""
     if (not isinstance(record, dict) or "error" in record or "generation_failure" in record
-            or record.get("evaluation_source") != "missing_answer_penalty" or record.get("answer") != ""):
+            or record.get("evaluation_source", "missing_answer_penalty") != "missing_answer_penalty"
+            or record.get("answer") != ""):
         return False
     evaluation = record.get("evaluation")
     if not isinstance(evaluation, dict):
@@ -87,3 +88,16 @@ def is_missing_answer_penalty(record: object) -> bool:
         type(value) is int for fields in evaluation.values() for key, value in fields.items()
         if key != "Penalty_Reason"
     )
+
+
+def review_matches_outcome(record: dict, answer: str, failure: dict | None) -> bool:
+    """Accept only a scored review of this answer or its current local penalty."""
+    if not is_scored_record(record):
+        return False
+    if answer:
+        return record.get("answer") == answer
+    if failure is not None:
+        return is_generation_failure_penalty(record) and record["generation_failure"] == failure["generation_failure"]
+    # Older dataset evaluations assigned the same minimum rubric before the
+    # explicit source marker existed. Generation runs require an actual outcome.
+    return record.get("mode", "dataset") == "dataset" and is_missing_answer_penalty(record)

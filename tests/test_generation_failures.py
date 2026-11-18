@@ -234,6 +234,59 @@ def test_sync_generation_records_recitation_and_continues(monkeypatch):
     assert wrapper.generate.call_count == checkpoint.call_count == 3
 
 
+@pytest.mark.parametrize("only_failures", [False, True])
+def test_extended_sample_includes_terminal_outcomes(tmp_path, monkeypatch, only_failures):
+    monkeypatch.chdir(tmp_path)
+    dataset = tmp_path / "answers.jsonl"
+    rows = [dataset_record("blocked", failure=FAILURE)]
+    if not only_failures:
+        rows.extend([dataset_record("recovered", failure=FAILURE), dataset_record("recovered")])
+    write_jsonl(dataset, rows)
+    engine = evaluation.EvaluationEngine(language="english", initialize_judge=False)
+    engine.evaluate = Mock(return_value={"Adherence": {"Core": 5}})
+    monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
+    results = tmp_path / "reviews.jsonl"
+    args = ["--mode", "extended", "--language", "english", "--dataset", str(dataset),
+            "--results-jsonl", str(results), "--skip-comparison-csv", "--no-progress"]
+    assert cli.main(args) == 0
+    master = build_master_row(ResultSource(results), repo_root=tmp_path)
+    assert master["question_count"] == (1 if only_failures else 2)
+    assert master["generation_failure_count"] == 1
+    assert engine.evaluate.call_count == int(not only_failures)
+    assert cli.main(args) == 0
+    assert engine.evaluate.call_count == int(not only_failures)
+
+
+def test_master_export_follows_restored_answers_even_when_replacement_judging_fails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    dataset = tmp_path / "answers.jsonl"
+    results = tmp_path / "reviews.jsonl"
+    questions = tmp_path / "questions.txt"
+    questions.write_text("restored\nreplaced\n")
+    restored, replaced = dataset_record("restored"), dataset_record("replaced")
+    write_jsonl(dataset, [restored, replaced])
+    answer = restored["messages"][-1]["content"]
+    base = {"dataset": str(dataset), "question": "restored", "answer": answer}
+    write_jsonl(results, [
+        {**base, "evaluation": {"Adherence": {"Core": 5}}},
+        {**base, "answer": "superseded", "evaluation": {"Adherence": {"Core": 2}}},
+        {**base, "question": "replaced", "answer": "", "evaluation": minimum_rubric_scores(),
+         "evaluation_source": "generation_failure_penalty", "generation_failure": FAILURE},
+    ])
+    engine = evaluation.EvaluationEngine(language="english", initialize_judge=False)
+    engine.evaluate = Mock(side_effect=RuntimeError("judge unavailable"))
+    monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
+    assert cli.main(["--mode", "dataset", "--language", "english", "--limit", "0",
+                     "--dataset", str(dataset), "--questions-file", str(questions),
+                     "--results-jsonl", str(results), "--skip-comparison-csv", "--no-progress"]) == 1
+    engine.evaluate.assert_called_once_with("replaced", answer)
+    master = build_master_row(ResultSource(results), repo_root=tmp_path)
+    assert master["question_count"] == 1
+    assert master["adherence_core_mean"] == 5
+    assert master["generation_failure_count"] == 0
+    assert master["error_count"] == 1
+
+
 @pytest.mark.parametrize("failure", [{"reason": "NETWORK_ERROR", "terminal": True},
                                     {"reason": "RECITATION", "terminal": False},
                                     {"reason": ["RECITATION"], "terminal": True}])

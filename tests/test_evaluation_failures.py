@@ -413,6 +413,55 @@ def test_fresh_generation_with_only_retryable_failures_exits_cleanly(tmp_path, m
     assert "Dataset ready" not in output
 
 
+@pytest.mark.parametrize("mode", ["generate-api_evals", "generate-ft_evals"])
+@pytest.mark.parametrize("with_saved_answer", [False, True])
+def test_standalone_generation_keeps_transport_failures_pending(tmp_path, monkeypatch, mode, with_saved_answer):
+    engine, _, results = _cli_fixture(tmp_path, monkeypatch, {})
+    questions = tmp_path / "questions.txt"
+    questions.write_text("q1\nq2\n" if with_saved_answer else "q2\n")
+    dataset = tmp_path / "generated.jsonl"
+    wrapper = Mock()
+    successes = ["saved"] if with_saved_answer else []
+    wrapper.generate.side_effect = [*successes, ConnectionError("offline"), ConnectionError("still offline"), "recovered"]
+    monkeypatch.setattr(evaluation_module, "ParrotAIClaude", lambda **kwargs: wrapper)
+    engine.evaluate = Mock(return_value={"Adherence": {"Core": 4}})
+    args = ["--mode", mode, "--language", "english", "--limit", "0", "--use-system-prompt",
+            "--provider", "anthropic", "--gen-model", "claude-test", "--questions-file", str(questions),
+            "--output-dataset", str(dataset), "--results-jsonl", str(results), "--no-progress"]
+    assert cli.main(args) == 1
+    engine.evaluate.assert_not_called()
+    assert not results.exists()
+    saved = dataset.read_bytes()
+    assert cli.main(args) == 0
+    assert dataset.read_bytes().startswith(saved)
+    initial_questions = ["q1"] if with_saved_answer else []
+    assert [call.kwargs["prompt"] for call in wrapper.generate.call_args_list] == [*initial_questions, "q2", "q2", "q2"]
+    assert [call.args for call in engine.evaluate.call_args_list] == [*zip(initial_questions, successes), ("q2", "recovered")]
+
+
+@pytest.mark.parametrize("stage", ["judging", "generating"])
+def test_progress_advances_only_for_saved_work(monkeypatch, stage):
+    engine = _engine()
+    bar = Mock()
+    monkeypatch.setattr(evaluation_module, "tqdm", Mock(return_value=bar))
+    emit = Mock()
+    monkeypatch.setattr(evaluation_module, "emit_progress", emit)
+    options = {"progress_initial": 497, "progress_total": 500}
+    if stage == "judging":
+        score = {"Adherence": {"Core": 4}}
+        engine.evaluate = Mock(side_effect=[score, ConnectionError("offline"), score])
+        engine.batch_evaluate([("q", "a")] * 4, limit=3, **options)
+        assert engine.evaluate.call_count == 3
+    else:
+        from parrot_ai.generation_failures import TerminalGenerationFailure
+        wrapper = Mock()
+        wrapper.generate.side_effect = ["answer", ConnectionError("offline"), TerminalGenerationFailure("RECITATION")]
+        monkeypatch.setattr(evaluation_module, "ParrotAIClaude", lambda **kwargs: wrapper)
+        engine.generate_responses(["q1", "q2", "q3"], provider="anthropic", **options)
+    assert sum(call.args[0] for call in bar.update.call_args_list) == 2
+    assert emit.call_args.args == (stage, 499, 500)
+
+
 @pytest.mark.parametrize("stage", ["generation", "judging"])
 @pytest.mark.parametrize("tail", [b'{"question": "q2",', b'{"question": "\xd8'])
 def test_resume_recovers_partial_checkpoint_before_loading(tmp_path, monkeypatch, stage, tail):

@@ -210,6 +210,17 @@ def test_sync_generation_exposes_recitation_as_terminal_outcome(gemini_transport
     assert len(requests) == 1
 
 
+@pytest.mark.parametrize("finish_reason", ["MAX_TOKENS", "SAFETY", None])
+def test_sync_generation_rejects_partial_text_as_retryable(gemini_transport, finish_reason):
+    requests, response = gemini_transport
+    response.update(finish_reason=finish_reason, text="A partial answer")
+    engine = EvaluationEngine(language="english", initialize_judge=False)
+    records = engine.generate_responses(["Question"], provider="google", progress=False)
+    assert len(requests) == len(records) == 1
+    assert "error" in records[0]
+    assert "answer" not in records[0] and "generation_failure" not in records[0]
+
+
 def test_sync_judge_recitation_stays_an_evaluation_error(gemini_transport):
     requests, response = gemini_transport
     response["finish_reason"] = "RECITATION"

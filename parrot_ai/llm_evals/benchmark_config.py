@@ -207,6 +207,12 @@ def validate_benchmark_config(config: BenchmarkConfig) -> None:
     ]
     if len(contender_judges) != len(set(contender_judges)):
         raise ValueError("Judge contender model IDs must be unique")
+    filename_owners = {}
+    for judge in (*config.default_judge_models, *contender_judges):
+        filename = sanitize_filename(judge).casefold()
+        owner = filename_owners.setdefault(filename, judge)
+        if owner != judge:
+            raise ValueError(f"Judge IDs {owner!r} and {judge!r} share a result filename")
     if config.limit < 0:
         raise ValueError("Benchmark limit cannot be negative")
 

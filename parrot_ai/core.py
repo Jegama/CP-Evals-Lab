@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from typing import Any, cast, Optional
 from contextlib import suppress
-from .generation_failures import TerminalGenerationFailure
+from .generation_failures import require_complete_gemini_answer
 
 
 # --- Prompt module loader -------------------------------------------------
@@ -483,9 +483,8 @@ class ParrotAIGemini(BaseParrotAI):
             model=model_to_use, contents=prompt, config=config
         )
 
-        candidates = getattr(response, "candidates", None) or []
-        if candidates and getattr(candidates[0], "finish_reason", None) == "RECITATION":
-            raise TerminalGenerationFailure("RECITATION")
+        candidate = response.candidates[0] if response.candidates else None
+        require_complete_gemini_answer(candidate.finish_reason if candidate else None)
         return response.text or ""
 
     # --- Files API helpers ---

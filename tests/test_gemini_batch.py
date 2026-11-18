@@ -239,6 +239,24 @@ def test_failed_sync_fallback_is_bounded_and_does_not_submit_another_batch(tmp_p
     assert client.batches.create.call_count == 1
 
 
+@pytest.mark.parametrize("error,attempts", [(ConnectionError("offline"), 3), (TypeError("bad request"), 1)])
+def test_stopped_fallback_for_old_keys_defers_new_keys(tmp_path, error, attempts):
+    client = FakeClient()
+    client.rows = lambda request: {"error": {"message": "failed"}}
+    kwargs = dict(model="gemini-test", artifact=tmp_path / "answers.jsonl", client=client,
+                  consume=lambda key, row, replay: "error" not in row)
+    batch.run_batch(requests=requests(3), **kwargs)
+    client.models.generate_content.side_effect = error
+    batch.run_batch(requests=requests(4), sync_fallback_max=3, **kwargs)
+    assert client.models.generate_content.call_count == attempts
+    assert client.batches.create.call_count == client.files.upload.call_count == 1
+    client.models.generate_content.side_effect = client.generate_content
+    client.rows = lambda request: {"response": response()}
+    batch.run_batch(requests=requests(4), sync_fallback_max=3, **kwargs)
+    assert client.batches.create.call_count == 2
+    assert [row["key"] for row in client.uploads["files/input-1"]] == list(requests(4))[-1:]
+
+
 @pytest.mark.parametrize("failure", ["empty", "MAX_TOKENS"])
 def test_recovered_generation_keeps_original_prompt_and_can_remain_incomplete(tmp_path, monkeypatch, failure):
     client = FakeClient()
@@ -513,6 +531,58 @@ def test_cli_generation_then_judging_batch_reuses_all_saved_results(tmp_path, mo
     assert cli.main(judge) == 0
     assert reviews.read_bytes() == original_reviews
     assert len(client.created) == 2
+
+
+@pytest.mark.parametrize("stage", ["generating", "judging"])
+@pytest.mark.parametrize("resume_execution", ["sync", "batch"])
+def test_cli_reconciles_interruption_after_final_batch_checkpoint(tmp_path, monkeypatch, stage, resume_execution):
+    monkeypatch.chdir(tmp_path)
+    questions = tmp_path / "questions.txt"
+    questions.write_text("q\n")
+    dataset = tmp_path / "answers.jsonl"
+    artifact = dataset if stage == "generating" else tmp_path / "reviews.jsonl"
+    args = ["--language", "english", "--limit", "0", "--questions-file", str(questions),
+            "--gemini-execution", "batch", "--no-progress", "--skip-comparison-csv"]
+    client = FakeClient()
+    monkeypatch.setattr(batch, "_new_client", lambda: client)
+    if stage == "generating":
+        args.extend(["--mode", "generate-api_evals", "--generate-only", "--provider", "google",
+                     "--gen-model", "gemini-test", "--output-dataset", str(dataset)])
+    else:
+        dataset.write_text(json.dumps({"messages": [{"role": "user", "content": "q"},
+                                                   {"role": "assistant", "content": "answer"}]}) + "\n")
+        rubric = {section: {name: 4 for name, field in model.annotation.model_fields.items() if field.is_required()}
+                  for section, model in EvaluationResultEnglish.model_fields.items()}
+        client.rows = lambda request: {"response": response(json.dumps(rubric))}
+        args.extend(["--mode", "dataset", "--dataset", str(dataset), "--answers-label", "answers",
+                     "--judge-model", "gemini-test", "--results-jsonl", str(artifact)])
+
+    save = batch._save
+    def interrupt_final_save(path, value):
+        if value.get("phase") == "imported":
+            raise KeyboardInterrupt
+        save(path, value)
+    with monkeypatch.context() as patch:
+        patch.setattr(batch, "_save", interrupt_final_save)
+        with pytest.raises(KeyboardInterrupt):
+            cli.main(args)
+    original = artifact.read_bytes()
+    manifest = next(batch.state_directory(artifact).glob("*.job.json"))
+    pending = json.loads(manifest.read_text())
+    assert pending["phase"] == "submitted"
+    artifact.write_text(json.dumps({"request_key": pending["keys"][0], "error": "unfinished"}) + "\n")
+    with pytest.raises(RuntimeError, match="unfinished Gemini batch"):
+        batch.ensure_no_pending_batch(artifact)
+    assert json.loads(manifest.read_text())["phase"] == "submitted"
+    artifact.write_bytes(original)
+    monkeypatch.setattr(batch, "_new_client", Mock(side_effect=AssertionError("unexpected provider call")))
+    engine = EvaluationEngine(model="gemini-test", language="english", initialize_judge=False)
+    monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
+    args[args.index("--gemini-execution") + 1] = resume_execution
+    assert cli.main(args) == 0
+    assert json.loads(manifest.read_text())["phase"] == "imported"
+    batch.ensure_no_pending_batch(artifact)
+    assert artifact.read_bytes() == original
 
 
 def test_cli_resumes_499_saved_answers_using_one_sync_retry(tmp_path, monkeypatch):

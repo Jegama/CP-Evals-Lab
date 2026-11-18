@@ -16,6 +16,13 @@ class TerminalGenerationFailure(ValueError):
         return {"reason": self.reason, "terminal": True}
 
 
+def require_complete_gemini_answer(reason: str | None) -> None:
+    if reason in TERMINAL_GENERATION_REASONS:
+        raise TerminalGenerationFailure(reason)
+    if reason != "STOP":
+        raise ValueError(f"Gemini answer did not finish successfully: {reason}")
+
+
 def is_terminal_generation_failure(record: object) -> bool:
     if not isinstance(record, dict) or "error" in record:
         return False

@@ -394,6 +394,21 @@ def test_reject_duplicate_judges_after_trimming():
         _load_with_judges(default_judge_models=["gpt-6-luna", " gpt-6-luna "])
 
 
+@pytest.mark.parametrize("panel,contenders", [
+    (["judge/a", "judge_a"], []),
+    (["judge/a"], ["judge_a"]),
+    (["other"], ["judge/a", "judge_a"]),
+    (["JudgeA", "judgea"], []),
+])
+def test_reject_colliding_judge_filenames(panel, contenders):
+    models = [{"provider": "google", "model": "base"}] + [
+        {"provider": "google", "model": f"model-{i}", "judge_contender": True, "judge_model": judge}
+        for i, judge in enumerate(contenders)
+    ]
+    with pytest.raises(ValueError, match="filename"):
+        _load_with_judges(default_judge_models=panel, models=models)
+
+
 def test_reject_ambiguous_judge_selection_fields():
     with pytest.raises(ValueError, match="only one judge selection field"):
         _load_with_judges(default_judge_models=list(PANEL), default_judge_model="gpt-5-mini")

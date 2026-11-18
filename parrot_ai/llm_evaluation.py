@@ -281,7 +281,7 @@ class EvaluationEngine:
         three consecutive failures so callers can save and resume partial work.
         """
         out: list[dict] = []
-        processed = 0
+        completed = progress_initial
         # Determine total length for progress bar
         total: Optional[int] = None
         try:
@@ -305,7 +305,7 @@ class EvaluationEngine:
         emit_progress("judging", progress_initial, total)
         consecutive_errors = 0
         for i, (q, a) in enumerate(pairs):
-            if limit is not None and processed >= limit:
+            if limit is not None and i >= limit:
                 break
             should_stop = False
             try:
@@ -329,10 +329,11 @@ class EvaluationEngine:
             # must stop immediately, not trigger more paid requests.
             if on_result is not None:
                 on_result(out[-1])
-            processed += 1
-            if bar:
-                bar.update(1)
-            emit_progress("judging", progress_initial + processed, total)
+            if "error" not in out[-1]:
+                completed += 1
+                if bar:
+                    bar.update(1)
+            emit_progress("judging", completed, total)
             if should_stop:
                 break
         if bar:
@@ -452,6 +453,7 @@ class EvaluationEngine:
                 bar = None
 
         emit_progress("generating", progress_initial, total)
+        completed = progress_initial
         consecutive_errors = 0
         for i, q in enumerate(questions):
             should_stop = False
@@ -498,9 +500,11 @@ class EvaluationEngine:
 
             if on_result is not None:
                 on_result(out[-1])
-            if bar:
-                bar.update(1)
-            emit_progress("generating", progress_initial + i + 1, total)
+            if "error" not in out[-1]:
+                completed += 1
+                if bar:
+                    bar.update(1)
+            emit_progress("generating", completed, total)
             if should_stop:
                 break
 

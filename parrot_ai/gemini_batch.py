@@ -15,7 +15,7 @@ from google import genai
 from google.genai import types
 
 from .gemini_transport import gemini_http_options
-from .generation_failures import TerminalGenerationFailure
+from .generation_failures import require_complete_gemini_answer
 
 
 TERMINAL_STATES = {
@@ -29,10 +29,42 @@ class GeminiBatchPending(RuntimeError):
 
 
 def ensure_no_pending_batch(artifact: Path) -> None:
-    for path in state_directory(artifact).glob("*.job.json"):
-        manifest = json.loads(path.read_text())
-        if manifest["phase"] not in ("imported", "rejected", "abandoned"):
-            raise RuntimeError(f"An unfinished Gemini batch exists at {path}; resume with --gemini-execution batch")
+    reconcile_checkpointed_batches(artifact, require_finished=True)
+
+
+def _saved_request_keys(artifact: Path) -> set[str]:
+    keys = set()
+    with artifact.open(encoding="utf-8") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if isinstance(row, dict) and "error" not in row and isinstance(row.get("request_key"), str):
+                keys.add(row["request_key"])
+    return keys
+
+
+def reconcile_checkpointed_batches(artifact: Path, *, require_finished: bool = False) -> None:
+    """Finish a downloaded job if every key already has a successful checkpoint."""
+    directory = state_directory(artifact)
+    if not directory.exists():
+        return
+    with _lock(directory):
+        saved_keys = None
+        for path in directory.glob("*.job.json"):
+            manifest = json.loads(path.read_text())
+            if manifest["phase"] in ("imported", "rejected", "abandoned"):
+                continue
+            if (manifest["phase"] == "submitted" and manifest.get("remote_state") in TERMINAL_STATES
+                    and path.with_suffix(".responses.jsonl").is_file() and artifact.is_file()):
+                if saved_keys is None:
+                    saved_keys = _saved_request_keys(artifact)
+                if saved_keys.issuperset(manifest["keys"]):
+                    manifest["phase"] = "imported"
+                    _save(path, manifest)
+                    continue
+            if require_finished:
+                raise RuntimeError(f"An unfinished Gemini batch exists at {path}; resume with --gemini-execution batch")
 
 
 def request_key(model: str, request: dict) -> str:
@@ -97,10 +129,7 @@ def response_text(response: dict) -> str:
         raise ValueError(f"Gemini returned no answer: {response.get('promptFeedback', {})}")
     candidate = candidates[0]
     reason = candidate.get("finishReason", candidate.get("finish_reason"))
-    if reason == "RECITATION":
-        raise TerminalGenerationFailure(reason)
-    if reason != "STOP":
-        raise ValueError(f"Gemini answer did not finish successfully: {reason}")
+    require_complete_gemini_answer(reason)
     text = "".join(
         part.get("text", "") for part in candidate.get("content", {}).get("parts", [])
         if not part.get("thought")
@@ -132,6 +161,7 @@ def run_batch(
     if type(sync_fallback_max) is not int or sync_fallback_max < 0:
         raise ValueError("Sync fallback maximum must be a non-negative integer")
     if not requests:
+        reconcile_checkpointed_batches(artifact)
         return
     directory = state_directory(artifact)
     pending = set(requests)
@@ -259,11 +289,12 @@ def run_batch(
         _save(manifest_path, manifest)
         return True
 
-    def recover_small_failure_set() -> None:
+    def recover_small_failure_set() -> bool:
+        """Return false when the failure cutoff forbids further requests."""
         keys = [key for key in requests if key in pending and key in failed
                 and key not in fallback_attempted]
         if not keys or len(keys) + len(fallback_attempted) > sync_fallback_max:
-            return
+            return True
         print(f"[batch fallback] Retrying {len(keys)} failed requests synchronously at standard pricing; saved successes are reused")
         # Do not switch back to a new paid batch after a failed sync retry.
         attempted.update(keys)
@@ -298,7 +329,8 @@ def run_batch(
                 consecutive_errors += 1
             if permanent_error or consecutive_errors >= 3:
                 print("[batch fallback] Stopped after request failures; saved successes preserved for resume")
-                break
+                return False
+        return True
 
     try:
         with _lock(directory):
@@ -311,7 +343,8 @@ def run_batch(
                 manifest = json.loads(path.read_text())
                 if manifest.get("model") == model:
                     retrieve(path, manifest)
-            recover_small_failure_set()
+            if not recover_small_failure_set():
+                return
             remaining = [key for key in requests if key in pending - attempted]
             if remaining:
                 identifier = uuid.uuid4().hex
