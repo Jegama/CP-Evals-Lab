@@ -37,7 +37,7 @@ class BenchmarkConfig:
     eval_version: str
     system_prompt_label: str
     use_system_prompt: bool
-    default_judge_model: str
+    default_judge_models: tuple[str, ...]
     max_parallel_operations: int
     limit: int
     timezone: str
@@ -47,12 +47,20 @@ class BenchmarkConfig:
     result_registry: Path
     generation_targets: tuple[GenerationTarget, ...]
     control_targets: tuple[ControlTarget, ...]
+    gemini_execution: str = "sync"
+    gemini_batch_sync_fallback_max: int = 0
 
     @property
     def judge_contenders(self) -> tuple[GenerationTarget, ...]:
         return tuple(
             target for target in self.generation_targets if target.judge_contender
         )
+
+    @property
+    def default_judge_model(self) -> str:
+        """First panel judge, retained for callers selecting one comparison judge."""
+
+        return self.default_judge_models[0]
 
     @property
     def initial_judge_model(self) -> str:
@@ -64,6 +72,23 @@ class BenchmarkConfig:
 def _repo_path(value: str, repo_root: Path) -> Path:
     path = Path(value)
     return path if path.is_absolute() else repo_root / path
+
+
+def _default_judge_models(payload: dict) -> tuple[str, ...]:
+    fields = ("default_judge_models", "default_judge_model", "initial_judge_model")
+    present = [field for field in fields if field in payload]
+    if len(present) > 1:
+        raise ValueError(f"Specify only one judge selection field: {', '.join(present)}")
+    field = present[0] if present else "default_judge_model"
+    value = payload.get(field, "gpt-5-mini")
+    # Legacy manifests may still use the singular key (scalar or list).
+    if isinstance(value, str) and field != "default_judge_models":
+        value = [value]
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{field} must be a non-empty list of model IDs")
+    if any(not isinstance(model, str) or not model.strip() for model in value):
+        raise ValueError(f"{field} must contain non-empty model ID strings")
+    return tuple(model.strip() for model in value)
 
 
 def load_benchmark_config(path: Path, repo_root: Path) -> BenchmarkConfig:
@@ -118,12 +143,7 @@ def load_benchmark_config(path: Path, repo_root: Path) -> BenchmarkConfig:
         eval_version=eval_version,
         system_prompt_label=system_prompt_label,
         use_system_prompt=bool(payload.get("use_system_prompt", True)),
-        default_judge_model=str(
-            payload.get(
-                "default_judge_model",
-                payload.get("initial_judge_model", "gpt-5-mini"),
-            )
-        ),
+        default_judge_models=_default_judge_models(payload),
         max_parallel_operations=int(payload.get("max_parallel_operations", 4)),
         limit=int(payload.get("limit", 0)),
         timezone=str(payload.get("timezone", "America/Chicago")),
@@ -150,14 +170,25 @@ def load_benchmark_config(path: Path, repo_root: Path) -> BenchmarkConfig:
         ),
         generation_targets=generation_targets,
         control_targets=control_targets,
+        gemini_execution=str(payload.get("gemini_execution", "sync")),
+        gemini_batch_sync_fallback_max=payload.get("gemini_batch_sync_fallback_max", 0),
     )
     validate_benchmark_config(config)
     return config
 
 
 def validate_benchmark_config(config: BenchmarkConfig) -> None:
-    if not config.default_judge_model:
-        raise ValueError("default_judge_model cannot be empty")
+    if type(config.gemini_batch_sync_fallback_max) is not int or config.gemini_batch_sync_fallback_max < 0:
+        raise ValueError("gemini_batch_sync_fallback_max must be a non-negative integer")
+    if config.gemini_execution not in ("sync", "batch"):
+        raise ValueError("gemini_execution must be sync or batch")
+    if not config.default_judge_models or any(
+        not isinstance(model, str) or not model.strip()
+        for model in config.default_judge_models
+    ):
+        raise ValueError("default_judge_models must contain non-empty model IDs")
+    if len(config.default_judge_models) != len(set(config.default_judge_models)):
+        raise ValueError("Default judge model IDs must be unique")
     if config.max_parallel_operations < 1:
         raise ValueError("max_parallel_operations must be at least 1")
     if not config.generation_targets:
@@ -176,6 +207,12 @@ def validate_benchmark_config(config: BenchmarkConfig) -> None:
     ]
     if len(contender_judges) != len(set(contender_judges)):
         raise ValueError("Judge contender model IDs must be unique")
+    filename_owners = {}
+    for judge in (*config.default_judge_models, *contender_judges):
+        filename = sanitize_filename(judge).casefold()
+        owner = filename_owners.setdefault(filename, judge)
+        if owner != judge:
+            raise ValueError(f"Judge IDs {owner!r} and {judge!r} share a result filename")
     if config.limit < 0:
         raise ValueError("Benchmark limit cannot be negative")
 
@@ -200,14 +237,15 @@ def results_path(config: BenchmarkConfig, answers_label: str, judge_model: str) 
 
 
 def expected_dynamic_sources(config: BenchmarkConfig) -> list[ResultSource]:
-    """Return default-judge and contender result files in deterministic order."""
+    """Return panel and contender result files in deterministic order."""
 
     paths: list[Path] = []
     seen_pairs: set[tuple[str, str]] = set()
     for target in config.generation_targets:
-        pair = (target.answers_label, config.default_judge_model)
-        seen_pairs.add(pair)
-        paths.append(results_path(config, *pair))
+        for judge_model in config.default_judge_models:
+            pair = (target.answers_label, judge_model)
+            seen_pairs.add(pair)
+            paths.append(results_path(config, *pair))
 
     contender_answer_sets = [
         (target.answers_label, generated_dataset_path(config, target))

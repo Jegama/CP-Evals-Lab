@@ -38,12 +38,11 @@ import csv
 import json
 import re
 import sys
-import random
-import math
 import importlib
+import os
 from datetime import datetime as dt
 from pathlib import Path
-from typing import Dict, List, Tuple, Set, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 from parrot_ai.llm_evaluation import (
     EvaluationEngine,
     load_qa_pairs,
@@ -54,7 +53,12 @@ from parrot_ai.llm_evals import (
     build_rows_order,
 )
 from parrot_ai.llm_evals.master_csv import infer_dataset_metadata
-from parrot_ai.llm_evals.score_validation import is_scored_record
+from parrot_ai.llm_evals.data_loading import load_saved_answers
+from parrot_ai.llm_evals.extended_sample import resolve_results_path, select_extended_questions
+from parrot_ai.llm_evals.score_validation import is_scored_record, minimum_rubric_scores, review_matches_outcome
+from parrot_ai.generation_failures import is_terminal_generation_failure, load_generation_failures
+from parrot_ai.jsonl_checkpoints import recover_jsonl_tail
+from parrot_ai.llm_evals.progress_reporting import emit_progress, BATCH_PENDING_EXIT_CODE
 
 
 def sanitize_filename(name: str) -> str:
@@ -77,6 +81,64 @@ def _load_system_prompt(engine: EvaluationEngine, use_system_prompt: bool) -> Op
         return None
 
 
+def _append_jsonl_record(path: Path, record: dict) -> None:
+    """Commit one record before the next paid request, preserving prior bytes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    recover_jsonl_tail(path)
+    with path.open("a+b") as stream:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell():
+            stream.seek(-1, os.SEEK_END)
+            if stream.read(1) != b"\n":
+                stream.write(b"\n")
+        stream.write((json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"))
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _save_generated_answer(
+    path: Path, response: dict, *, gen_model: str,
+    use_system_prompt: bool, system_prompt_label: Optional[str],
+) -> None:
+    if "error" in response:
+        return
+    record = {
+        "messages": [
+            {"role": "user", "content": response["question"]},
+            {"role": "assistant", "content": response["answer"]},
+        ],
+        "gen_model": gen_model,
+        "provider": response.get("provider"),
+        "timestamp": dt.now().astimezone().isoformat(),
+        "use_system_prompt": use_system_prompt,
+    }
+    if system_prompt_label:
+        record["system_prompt_label"] = system_prompt_label
+    for key in ("execution_mode", "batch_job", "request_key", "usage_metadata", "generation_failure"):
+        if key in response:
+            record[key] = response[key]
+    _append_jsonl_record(path, record)
+
+
+def _generate_responses(engine, questions, *, artifact, gemini_execution="sync",
+                        batch_poll_seconds=30, batch_retry_unconfirmed=False, batch_wait=True,
+                        batch_sync_fallback_max=0, **kwargs):
+    if gemini_execution == "batch" and kwargs.get("provider") == "google":
+        from parrot_ai.llm_evals.gemini_batch_adapter import generate_gemini_batch
+        kwargs.pop("provider")
+        kwargs.pop("progress", None)
+        return generate_gemini_batch(
+            engine, questions, artifact=artifact, poll_seconds=batch_poll_seconds,
+            retry_unconfirmed=batch_retry_unconfirmed, wait=batch_wait,
+            sync_fallback_max=batch_sync_fallback_max, **kwargs,
+        )
+    if kwargs.get("provider") == "google":
+        from parrot_ai.llm_evals.gemini_batch_adapter import guard_gemini_sync
+        guard_gemini_sync(engine, ((q, "") for q in questions), model=kwargs["model"], artifact=artifact,
+                          stage="generating", system=kwargs.get("system"))
+    return engine.generate_responses(questions, **kwargs)
+
+
 def generate_dataset(
     provider: str,
     questions_file: str,
@@ -87,8 +149,13 @@ def generate_dataset(
     limit: int = 100,
     system_prompt_label: Optional[str] = None,
     progress: bool = True,
+    gemini_execution: str = "sync",
+    batch_poll_seconds: float = 30,
+    batch_retry_unconfirmed: bool = False,
+    batch_wait: bool = True,
+    batch_sync_fallback_max: int = 0,
 ) -> tuple[str, bool]:
-    """Persist successful answers and return the path and batch-aborted state."""
+    """Persist answers and terminal model failures; return path and abort status."""
     # Load questions (limit=None means all if limit is 0)
     load_limit = None if limit == 0 else limit
     questions = load_eval_questions(questions_file, limit=load_limit)
@@ -97,53 +164,28 @@ def generate_dataset(
 
     # Get system prompt if requested
     system_prompt = _load_system_prompt(engine, use_system_prompt)
+    out_path = Path(output_dataset)
+    if use_system_prompt and system_prompt:
+        _append_jsonl_record(out_path, {"role": "system", "content": system_prompt})
+
+    def checkpoint(response: dict) -> None:
+        _save_generated_answer(
+            out_path, response, gen_model=gen_model,
+            use_system_prompt=use_system_prompt, system_prompt_label=system_prompt_label,
+        )
 
     # Generate responses using the unified method
-    responses = engine.generate_responses(
-        questions,
+    responses = _generate_responses(
+        engine, questions, artifact=out_path, gemini_execution=gemini_execution,
+        batch_poll_seconds=batch_poll_seconds, batch_retry_unconfirmed=batch_retry_unconfirmed,
+        batch_wait=batch_wait, batch_sync_fallback_max=batch_sync_fallback_max,
         provider=provider,
         model=gen_model,
         system=system_prompt if use_system_prompt else None,
         progress=progress,
+        on_result=checkpoint,
     )
-
-    out_path = Path(output_dataset)
-    mode_flag = "a" if out_path.exists() else "w"
-    print(
-        f"[generate] {'Appending to' if mode_flag == 'a' else 'Creating'} dataset: {out_path}"
-    )
-    with out_path.open(mode_flag, encoding="utf-8") as f:
-        if use_system_prompt and system_prompt:
-            f.write(
-                json.dumps(
-                    {"role": "system", "content": system_prompt}, ensure_ascii=False
-                )
-                + "\n"
-            )
-
-        for r in responses:
-            if "error" in r:
-                print(
-                    f"[warning] Error generating response for question {r['index']}: {r['error']}"
-                )
-                continue
-
-            msgs = [
-                {"role": "user", "content": r["question"]},
-                {"role": "assistant", "content": r["answer"]},
-            ]
-
-            obj = {
-                "messages": msgs,
-                "gen_model": gen_model,
-                "provider": r.get("provider"),
-                "timestamp": dt.now().astimezone().isoformat(),
-                "use_system_prompt": use_system_prompt,
-            }
-            if system_prompt_label:
-                obj["system_prompt_label"] = system_prompt_label
-            f.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    return str(out_path), responses.aborted
+    return str(out_path), responses.aborted or not out_path.exists()
 
 
 def ensure_csv_structure(
@@ -233,13 +275,11 @@ def update_comparison_csv(
     print(f"[csv] Updated -> {csv_path}")
 
 
-def append_results_jsonl(path: Path, results: List[dict], meta: dict) -> None:
-    mode = "a" if path.exists() else "w"
-    with path.open(mode, encoding="utf-8") as f:
-        for r in results:
-            r_out = {**r, **meta}
-            f.write(json.dumps(r_out, ensure_ascii=False) + "\n")
-    print(f"[results] Appended {len(results)} -> {path}")
+def append_results_jsonl(path: Path, results: List[dict], meta: dict, *, quiet: bool = False) -> None:
+    for record in results:
+        _append_jsonl_record(path, {**record, **meta})
+    if not quiet:
+        print(f"[results] Appended {len(results)} -> {path}")
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -312,9 +352,34 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help="Do not update the legacy transposed comparison CSV",
     )
     p.add_argument(
+        "--gemini-execution", choices=["sync", "batch"], default="sync",
+        help="Use synchronous Gemini calls or durable remote batches at batch rates",
+    )
+    p.add_argument(
+        "--gemini-batch-poll-seconds", type=float, default=30,
+        help="Seconds between remote Gemini batch status checks (default: 30)",
+    )
+    p.add_argument(
+        "--gemini-batch-no-wait", action="store_true",
+        help="Submit/check a batch and exit 75 while it runs (used by the benchmark scheduler)",
+    )
+    p.add_argument(
+        "--gemini-batch-retry-unconfirmed", action="store_true",
+        help="Allow resubmission ONLY after verifying an unconfirmed batch was not created remotely",
+    )
+    p.add_argument(
+        "--gemini-batch-sync-fallback-max", type=int, default=0,
+        help="Retry at most this many failed batch items synchronously per operation at standard rates (0 disables)",
+    )
+    p.add_argument(
+        "--generate-only",
+        action="store_true",
+        help="Account for every question with an answer or terminal model failure, then exit without judging",
+    )
+    p.add_argument(
         "--require-complete-answers",
         action="store_true",
-        help="Fail before judging if any selected question has a missing or blank answer",
+        help="Fail before judging on unresolved missing/blank answers; recorded terminal model failures receive local penalties",
     )
     p.add_argument(
         "--results-jsonl",
@@ -388,8 +453,23 @@ def infer_system_prompt_label_from_dataset(path: Path) -> str | None:
     return None
 
 
-def main(argv: List[str]) -> int:
+def _main(argv: List[str]) -> int:
     args = parse_args(argv)
+    generation_mode = args.mode.startswith("generate")
+    if args.generate_only and not generation_mode:
+        raise SystemExit("--generate-only requires a generation mode")
+    if args.gemini_batch_poll_seconds <= 0:
+        raise SystemExit("--gemini-batch-poll-seconds must be positive")
+    if args.gemini_batch_sync_fallback_max < 0:
+        raise SystemExit("--gemini-batch-sync-fallback-max must be non-negative")
+    batch_judge = args.gemini_execution == "batch" and args.judge_model.startswith("gemini")
+    batch_options = dict(
+        gemini_execution=args.gemini_execution,
+        batch_poll_seconds=args.gemini_batch_poll_seconds,
+        batch_retry_unconfirmed=args.gemini_batch_retry_unconfirmed,
+        batch_wait=not args.gemini_batch_no_wait,
+        batch_sync_fallback_max=args.gemini_batch_sync_fallback_max,
+    )
 
     # Directory scaffolding based on language & mode
     base_lang_dir = Path("data") / args.language
@@ -429,12 +509,13 @@ def main(argv: List[str]) -> int:
     else:
         comparison_csv_path = default_comp_csv
 
-    # Build judge engine
-    engine = EvaluationEngine(model=args.judge_model, language=args.language)
-    print(f"[init] Judge model: {args.judge_model}")
+    engine = EvaluationEngine(
+        model=args.judge_model, language=args.language,
+        initialize_judge=False,
+    )
+    if not args.generate_only:
+        print(f"[init] Judge model: {args.judge_model}")
     print(f"[init] Language: {args.language} | Mode: {args.mode}")
-
-    generation_mode = args.mode.startswith("generate")
 
     # MODE: generation (ft_evals or api_evals)
     if generation_mode:
@@ -474,15 +555,20 @@ def main(argv: List[str]) -> int:
                 limit=args.limit,
                 system_prompt_label=args.system_prompt_label,
                 progress=not args.no_progress,
+                **batch_options,
             )
             dataset_path = Path(generated_path)
             if generation_aborted:
+                saved_status = (
+                    f"Completed records saved at {dataset_path}."
+                    if dataset_path.exists() else "No answers were saved."
+                )
                 print(
-                    f"[failed] Generation stopped; successful answers saved at {dataset_path}. "
+                    f"[failed] Generation stopped. {saved_status} "
                     "Rerun to resume; no judge calls made."
                 )
                 return 1
-            print(f"[generate] Dataset ready at {dataset_path}")
+            print(f"[generate] Dataset checkpoint at {dataset_path}")
     else:  # MODE: dataset
         if not args.dataset:
             raise SystemExit("--dataset required for dataset mode")
@@ -494,6 +580,7 @@ def main(argv: List[str]) -> int:
                 dataset_path = candidate
         if not dataset_path.exists():
             raise SystemExit(f"Dataset not found: {dataset_path}")
+        recover_jsonl_tail(dataset_path)
         if not answers_label:
             inferred = infer_answers_label_from_dataset(dataset_path)
             if inferred:
@@ -504,6 +591,8 @@ def main(argv: List[str]) -> int:
                     "Provide --answers-label (could not infer from dataset)."
                 )
 
+    if generation_mode:
+        recover_jsonl_tail(dataset_path)
     if not system_prompt_label and dataset_path.exists():
         inferred_prompt = infer_system_prompt_label_from_dataset(dataset_path)
         if inferred_prompt:
@@ -511,6 +600,8 @@ def main(argv: List[str]) -> int:
             print(f"[infer] Using inferred system prompt label: {system_prompt_label}")
 
     dataset_metadata = infer_dataset_metadata(dataset_path)
+    q_to_a = load_saved_answers(dataset_path)
+    generation_failures = load_generation_failures(dataset_path)
     effective_gen_model = args.gen_model or dataset_metadata.get("gen_model")
     effective_provider = args.provider or dataset_metadata.get("provider")
     effective_use_system_prompt = (
@@ -522,80 +613,64 @@ def main(argv: List[str]) -> int:
     if not answers_label:
         answers_label = "answers"
 
+    results_name = Path(args.results_jsonl or f"eval_results_{sanitize_filename(answers_label)}__judged_by_{sanitize_filename(args.judge_model)}.jsonl")
+    results_jsonl = results_name if results_name.is_absolute() else default_comp_csv.parent / results_name.name
+    if not args.generate_only:
+        results_jsonl = resolve_results_path(results_jsonl, args.mode, explicit=bool(args.results_jsonl))
+
     if args.mode == "extended":
         # Extended mode: random sample of questions directly from dataset
-        raw_pairs = load_qa_pairs(
-            str(dataset_path),
-            question_list_path=None,
-            limit=0,
-        )
-        if not raw_pairs:
+        for question in generation_failures:
+            q_to_a.setdefault(question, "")
+        if not q_to_a:
             raise SystemExit("Dataset appears empty or unreadable for extended mode.")
-        q_to_a: Dict[str, str] = {}
-        for q, a in raw_pairs:
-            if q not in q_to_a:
-                q_to_a[q] = a
-        total_q = len(q_to_a)
-        sample_target = max(500, math.ceil(0.10 * total_q))
-        if sample_target > total_q:
-            sample_target = total_q
-        sample_questions = random.sample(list(q_to_a.keys()), sample_target)
+        sample_questions = select_extended_questions(results_jsonl, q_to_a, engine)
         pairs = [(q, q_to_a[q]) for q in sample_questions]
-        print(
-            f"[extended] Selected random sample of {len(pairs)} questions (total available: {total_q}; target rule: max(500,10%={math.ceil(0.10 * total_q)}))"
-        )
+        print(f"[extended] Using {len(pairs)} sampled questions from {len(q_to_a)} available.")
     elif generation_mode:
-        # Generation evaluation: use question list; penalize missing answers by inserting empty answer strings
+        # Resume generation before judging the canonical questions.
         limit_val = None if args.limit == 0 else args.limit
         eval_questions = load_eval_questions(questions_file, limit=limit_val)
         if not eval_questions:
             raise SystemExit(
                 "Questions file empty or unreadable for generation evaluation."
             )
-        raw_pairs = load_qa_pairs(
-            str(dataset_path),
-            question_list_path=None,
-            limit=0,
-        )
-        q_to_a: Dict[str, str] = {}
-        for q, a in raw_pairs:
-            if q not in q_to_a:
-                q_to_a[q] = a
-        missing_questions = [q for q in eval_questions if not q_to_a.get(q, "").strip()]
+        terminal_questions = {q for q in eval_questions if q in generation_failures and not q_to_a.get(q, "").strip()}
+        missing_questions = [q for q in eval_questions if not q_to_a.get(q, "").strip() and q not in terminal_questions]
+        reused_answers = len(eval_questions) - len(missing_questions) - len(terminal_questions)
+        accounted = reused_answers + len(terminal_questions)
+        print(f"[resume] Answers: {reused_answers}/{len(eval_questions)} saved; {len(missing_questions)} remaining"
+              + (f"; {len(terminal_questions)} recorded model failures" if terminal_questions else ""))
+        emit_progress("generating", accounted, len(eval_questions), reused=accounted)
         if missing_questions:
             print(
                 f"[retry] {len(missing_questions)} missing answers detected, retrying generation..."
             )
-            retry_responses = engine.generate_responses(
-                missing_questions,
+            retried = 0
+
+            def checkpoint_retry(response: dict) -> None:
+                nonlocal retried
+                _save_generated_answer(
+                    dataset_path, response, gen_model=args.gen_model,
+                    use_system_prompt=args.use_system_prompt,
+                    system_prompt_label=args.system_prompt_label,
+                )
+                if is_terminal_generation_failure(response):
+                    generation_failures[response["question"]] = response
+                elif "error" not in response:
+                    q_to_a[response["question"]] = response["answer"]
+                    retried += 1
+
+            retry_responses = _generate_responses(
+                engine, missing_questions, artifact=dataset_path, **batch_options,
                 provider=args.provider,
                 model=args.gen_model,
                 system=_load_system_prompt(engine, args.use_system_prompt),
                 progress=not args.no_progress,
+                on_result=checkpoint_retry,
+                progress_initial=accounted,
+                progress_total=len(eval_questions),
             )
-            # Append retried answers to the JSONL and update q_to_a
-            retried = 0
-            with dataset_path.open("a", encoding="utf-8") as f:
-                for r in retry_responses:
-                    if "error" in r:
-                        print(f"[retry] Still failed: {r['question'][:60]}... -> {r['error']}")
-                        continue
-                    q_to_a[r["question"]] = r["answer"]
-                    retried += 1
-                    msgs = [
-                        {"role": "user", "content": r["question"]},
-                        {"role": "assistant", "content": r["answer"]},
-                    ]
-                    obj = {
-                        "messages": msgs,
-                        "gen_model": args.gen_model,
-                        "provider": r.get("provider"),
-                        "timestamp": dt.now().astimezone().isoformat(),
-                        "use_system_prompt": args.use_system_prompt,
-                    }
-                    if args.system_prompt_label:
-                        obj["system_prompt_label"] = args.system_prompt_label
-                    f.write(json.dumps(obj, ensure_ascii=False) + "\n")
             print(f"[retry] Recovered {retried}/{len(missing_questions)} missing answers")
             if retry_responses.aborted:
                 print(
@@ -603,21 +678,11 @@ def main(argv: List[str]) -> int:
                     "Rerun to resume; no judge calls made."
                 )
                 return 1
+        elif args.provider == "google":
+            from parrot_ai.gemini_batch import reconcile_checkpointed_batches
+            reconcile_checkpointed_batches(dataset_path)
 
-        missing = 0
-        pairs: List[Tuple[str, str]] = []
-        for q in eval_questions:
-            if q in q_to_a:
-                pairs.append((q, q_to_a[q]))
-            else:
-                missing += 1
-                pairs.append(
-                    (q, "")
-                )  # Placeholder blank answer -> evaluation engine will penalize
-        if missing:
-            print(
-                f"[generate-eval] WARNING: {missing} missing answers still present (will be penalized)."
-            )
+        pairs = [(q, q_to_a.get(q, "")) for q in eval_questions]
         print(
             f"[generate-eval] Prepared {len(pairs)} question/answer pairs for evaluation."
         )
@@ -625,35 +690,15 @@ def main(argv: List[str]) -> int:
         # Standard dataset mode: strict curated list (default 100)
         limit_val = None if args.limit == 0 else args.limit
         eval_questions = load_eval_questions(questions_file, limit=limit_val)
-        eval_set: Set[str] = set(eval_questions)
         if args.limit == 100 and len(eval_questions) != 100:
             raise SystemExit(
                 f"Evaluation questions file must contain 100 questions (got {len(eval_questions)})."
             )
 
-        raw_pairs = load_qa_pairs(
-            str(dataset_path),
-            question_list_path=None,
-            limit=0,
-        )
-        q_to_a: Dict[str, str] = {}
-        for q, a in raw_pairs:
-            if q in eval_set and q not in q_to_a:
-                q_to_a[q] = a
-        
-        missing_count = 0
-        pairs: List[Tuple[str, str]] = []
-        for q in eval_questions:
-            if q in q_to_a:
-                pairs.append((q, q_to_a[q]))
-            else:
-                missing_count += 1
-                pairs.append((q, ""))  # Empty answer triggers penalty
-        
+        pairs = [(q, q_to_a.get(q, "")) for q in eval_questions]
+        missing_count = sum(not answer for _, answer in pairs)
         if missing_count:
-            print(
-                f"[dataset] WARNING: {missing_count} missing answers inserted as empty strings (will be penalized)."
-            )
+            print(f"[dataset] {missing_count} unanswered questions retained in the scoring denominator.")
         else:
             print(
                 f"[load] Filtered {len(pairs)} evaluation pairs from dataset (strict 100-question set)."
@@ -662,8 +707,8 @@ def main(argv: List[str]) -> int:
     if not pairs:
         print("[failed] No question/answer pairs available for evaluation.")
         return 1
-    if args.require_complete_answers:
-        missing_answers = sum(not answer.strip() for _, answer in pairs)
+    if generation_mode or args.require_complete_answers:
+        missing_answers = sum(not answer.strip() and q not in generation_failures for q, answer in pairs)
         if missing_answers:
             print(
                 f"[failed] {missing_answers}/{len(pairs)} answers are missing or blank. "
@@ -671,28 +716,17 @@ def main(argv: List[str]) -> int:
             )
             return 1
 
-    # Results JSONL placement (mode dependent) -- resolve path BEFORE evaluation
-    if args.mode in ("dataset", "extended"):
-        default_results_dir = training_evals_dir
-    elif args.mode == "generate-ft_evals":
-        default_results_dir = ft_evals_dir
-    else:  # generate-api_evals
-        default_results_dir = api_evals_dir
-
-    default_results_dir.mkdir(parents=True, exist_ok=True)
-    if args.results_jsonl:
-        supplied = Path(args.results_jsonl)
-        if supplied.is_absolute():
-            results_jsonl = supplied
-        else:
-            results_jsonl = default_results_dir / supplied.name
-    else:
-        filename = f"eval_results_{sanitize_filename(answers_label)}__judged_by_{sanitize_filename(args.judge_model)}.jsonl"
-        results_jsonl = default_results_dir / filename
+    if args.generate_only:
+        failure_count = sum(not answer.strip() and q in generation_failures for q, answer in pairs)
+        print(f"[done] Generation complete: {len(pairs) - failure_count} answers and {failure_count} recorded model failures; "
+              f"{len(pairs)}/{len(pairs)} questions accounted for at {dataset_path}.")
+        return 0
 
     # Load existing eval results for incremental evaluation
     existing_results: Dict[str, dict] = {}
+    current_answers = dict(pairs)
     if results_jsonl.exists():
+        recover_jsonl_tail(results_jsonl)
         with results_jsonl.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -702,10 +736,12 @@ def main(argv: List[str]) -> int:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(obj, dict):
+                    continue
                 q = obj.get("question", "")
-                answer = obj.get("answer", "")
-                # Keep result if it has a valid evaluation and the answer wasn't empty
-                if q and is_scored_record(obj) and isinstance(answer, str) and answer.strip():
+                if isinstance(q, str) and q in current_answers and review_matches_outcome(
+                    obj, current_answers[q], generation_failures.get(q)
+                ):
                     existing_results[q] = obj
         print(f"[eval] Found {len(existing_results)} existing evaluations in {results_jsonl}")
 
@@ -715,12 +751,88 @@ def main(argv: List[str]) -> int:
         if q not in existing_results:
             pairs_to_eval.append((q, a))
 
+    # Metadata is available before the batch so every result is checkpointed.
+    dataset_absolute = dataset_path.resolve()
+    try:
+        dataset_metadata_path = dataset_absolute.relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        dataset_metadata_path = str(dataset_absolute)
+    meta = {
+        "dataset": dataset_metadata_path,
+        "answers_label": answers_label,
+        "judge_model": args.judge_model,
+        "gen_model": effective_gen_model,
+        "provider": effective_provider,
+        "use_system_prompt": effective_use_system_prompt,
+        "system_prompt_label": system_prompt_label,
+        "questions_file": questions_file,
+        "language": args.language,
+        "mode": args.mode,
+        "extended_sample_size": len(pairs) if args.mode == "extended" else None,
+        "comparison_csv": None if args.skip_comparison_csv else str(comparison_csv_path),
+    }
+
+    def checkpoint_result(result: dict) -> None:
+        append_results_jsonl(
+            results_jsonl, [result],
+            {**meta, "timestamp": dt.now().astimezone().isoformat()}, quiet=True,
+        )
+
+    local_penalties = 0
+    model_failure_penalties = 0
+    remaining_pairs = []
+    for q, answer in pairs_to_eval:
+        if not answer.strip():
+            penalty = {
+                "question": q, "answer": "", "evaluation_source": "missing_answer_penalty",
+                "evaluation": minimum_rubric_scores(args.language),
+            }
+            if q in generation_failures:
+                penalty["generation_failure"] = generation_failures[q]["generation_failure"]
+                penalty["evaluation_source"] = "generation_failure_penalty"
+                model_failure_penalties += 1
+            checkpoint_result(penalty)
+            existing_results[q] = penalty
+            local_penalties += 1
+        else:
+            remaining_pairs.append((q, answer))
+    pairs_to_eval = remaining_pairs
+    if local_penalties:
+        print(f"[penalty] Scored {local_penalties} blank answers locally at minimum rubric scores "
+              f"({model_failure_penalties} recorded model failures); "
+              f"scoring denominator remains {len(pairs)} questions")
+
+    reused_scores = len(pairs) - len(pairs_to_eval)
+    print(f"[resume] Reviews: {reused_scores}/{len(pairs)} saved; {len(pairs_to_eval)} remaining")
+    emit_progress("judging", reused_scores, len(pairs), reused=reused_scores)
     if pairs_to_eval:
         print(f"[eval] Evaluating {len(pairs_to_eval)} new/missing pairs (skipping {len(pairs) - len(pairs_to_eval)} already evaluated)...")
-        new_results = engine.batch_evaluate(pairs_to_eval, limit=None, progress=not args.no_progress)
+        if batch_judge:
+            from parrot_ai.llm_evals.gemini_batch_adapter import judge_gemini_batch
+            new_results = judge_gemini_batch(
+                engine, pairs_to_eval, artifact=results_jsonl,
+                on_result=checkpoint_result, progress_initial=reused_scores,
+                progress_total=len(pairs), poll_seconds=args.gemini_batch_poll_seconds,
+                retry_unconfirmed=args.gemini_batch_retry_unconfirmed,
+                wait=not args.gemini_batch_no_wait,
+                sync_fallback_max=args.gemini_batch_sync_fallback_max,
+            )
+        else:
+            if args.judge_model.startswith("gemini"):
+                from parrot_ai.llm_evals.gemini_batch_adapter import guard_gemini_sync
+                guard_gemini_sync(engine, pairs_to_eval, model=args.judge_model, artifact=results_jsonl, stage="judging")
+            engine = EvaluationEngine(model=args.judge_model, language=args.language, initialize_judge=True)
+            new_results = engine.batch_evaluate(
+                pairs_to_eval, limit=None, progress=not args.no_progress,
+                on_result=checkpoint_result,
+                progress_initial=reused_scores, progress_total=len(pairs),
+            )
         print("[eval] Done.")
     else:
         new_results = []
+        if args.judge_model.startswith("gemini"):
+            from parrot_ai.gemini_batch import reconcile_checkpointed_batches
+            reconcile_checkpointed_batches(results_jsonl)
         print("[eval] All pairs already evaluated, skipping evaluation.")
 
     # Merge: existing results + new results, rebuild full list in pairs order
@@ -785,31 +897,8 @@ def main(argv: List[str]) -> int:
             meta_values=csv_meta_values,
         )
 
-    # Keep in-repository dataset metadata portable without changing external paths.
-    dataset_absolute = dataset_path.resolve()
-    try:
-        dataset_metadata_path = dataset_absolute.relative_to(Path.cwd().resolve()).as_posix()
-    except ValueError:
-        dataset_metadata_path = str(dataset_absolute)
-
-    # Append attempted results, including errors, so successful work is resumable.
-    meta = {
-        "dataset": dataset_metadata_path,
-        "answers_label": answers_label,
-        "judge_model": args.judge_model,
-        "gen_model": effective_gen_model,
-        "provider": effective_provider,
-        "use_system_prompt": effective_use_system_prompt,
-        "system_prompt_label": system_prompt_label,
-        "questions_file": questions_file,
-        "language": args.language,
-        "mode": args.mode,
-        "extended_sample_size": len(pairs) if args.mode == "extended" else None,
-        "comparison_csv": None if args.skip_comparison_csv else str(comparison_csv_path),
-        "timestamp": dt.now().astimezone().isoformat(),
-    }
-    if new_results:
-        append_results_jsonl(results_jsonl, new_results, meta)
+    if new_results or local_penalties:
+        print(f"[results] Checkpointed {len(new_results)} judge results and {local_penalties} local penalties -> {results_jsonl}")
     else:
         print(f"[results] No new results to append to {results_jsonl}")
     if failed_count:
@@ -820,6 +909,15 @@ def main(argv: List[str]) -> int:
         return 1
     print("[done] Completed.")
     return 0
+
+
+def main(argv: List[str]) -> int:
+    from parrot_ai.gemini_batch import GeminiBatchPending
+    try:
+        return _main(argv)
+    except GeminiBatchPending as exc:
+        print(f"[batch pending] {exc}; rerun to retrieve results, without resubmitting")
+        return BATCH_PENDING_EXIT_CODE
 
 
 if __name__ == "__main__":

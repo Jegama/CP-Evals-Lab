@@ -1,7 +1,24 @@
 """Data loading utilities for evaluation QA pairs and question lists."""
 
 import json
+from pathlib import Path
 from typing import List, Tuple, Optional
+
+
+def load_jsonl(path: Path) -> list[dict]:
+    records: list[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                item = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON in {path}:{line_number}: {exc}") from exc
+            if isinstance(item, dict):
+                records.append(item)
+    return records
 
 
 def load_qa_pairs(
@@ -81,6 +98,14 @@ def load_qa_pairs(
     if question_set is None and limit and limit > 0:
         pairs = pairs[:limit]
     return pairs
+
+
+def load_saved_answers(dataset_path: Path) -> dict[str, str]:
+    """Use the first valid answer for each question in checkpoint order."""
+    answers = {}
+    for question, answer in load_qa_pairs(str(dataset_path), question_list_path=None, limit=0):
+        answers.setdefault(question, answer)
+    return answers
 
 
 def load_eval_questions(

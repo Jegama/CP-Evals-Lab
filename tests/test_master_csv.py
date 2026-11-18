@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from parrot_ai.llm_evals.master_csv import ResultSource, build_master_row, write_master_csv
+from parrot_ai.llm_evals.score_validation import minimum_rubric_scores
 
 
 def _score_payload(value: int) -> dict:
@@ -54,12 +55,13 @@ def test_build_master_row_infers_answer_identity_and_latest_timestamp(tmp_path: 
         [
             {"role": "system", "content": "prompt"},
             {
-                "messages": [],
+                "messages": [{"role": "user", "content": "Q1"}, {"role": "assistant", "content": "A1"}],
                 "provider": "openai",
                 "gen_model": "model",
                 "system_prompt_label": "v1_4",
                 "use_system_prompt": True,
             },
+            {"messages": [{"role": "user", "content": "Q2"}, {"role": "assistant", "content": "A2"}]},
         ],
     )
     results = tmp_path / "data/english/api_evals/results.jsonl"
@@ -132,6 +134,37 @@ def test_master_rejects_scoreless_evaluations(tmp_path):
         build_master_row(ResultSource(results), repo_root=tmp_path)
 
 
+@pytest.mark.parametrize("mode", ["dataset", "generate-api_evals"])
+def test_historical_blank_penalty_requires_a_missing_dataset_answer(tmp_path, mode):
+    dataset = tmp_path / "answers.jsonl"
+    dataset.touch()
+    results = tmp_path / "reviews.jsonl"
+    _write_jsonl(results, [{"dataset": str(dataset), "mode": mode, "question": "Q", "answer": "",
+                            "evaluation": minimum_rubric_scores()}])
+    row = build_master_row(ResultSource(results), repo_root=tmp_path)
+    assert row["question_count"] == int(mode == "dataset")
+    assert row["adherence_core_mean"] == (1 if mode == "dataset" else "")
+
+
+def test_master_rebuild_clears_scores_when_every_review_is_stale(tmp_path):
+    dataset = tmp_path / "answers.jsonl"
+    def save_answer(answer):
+        _write_jsonl(dataset, [{"messages": [{"role": "user", "content": "Q"}, {"role": "assistant", "content": answer}]}])
+    save_answer("A")
+    results = tmp_path / "reviews.jsonl"
+    old = {"dataset": str(dataset), "question": "Q", "answer": "A", "evaluation": _score_payload(5)}
+    _write_jsonl(results, [old])
+    master = tmp_path / "master.csv"
+    sources = [ResultSource(results)]
+    assert write_master_csv(sources, master, repo_root=tmp_path)[0]["question_count"] == 1
+    save_answer("B")
+    _write_jsonl(results, [old, {"dataset": str(dataset), "question": "Q", "error": "judge unavailable"}])
+    row, = write_master_csv(sources, master, repo_root=tmp_path)
+    assert row["question_count"] == row["generation_failure_count"] == 0
+    assert row["adherence_core_mean"] == ""
+    assert row["error_count"] == 1
+
+
 @pytest.mark.parametrize("author_dataset_exists", [True, False])
 def test_master_csv_is_portable_with_legacy_absolute_dataset_paths(
     tmp_path: Path, author_dataset_exists: bool,
@@ -144,7 +177,8 @@ def test_master_csv_is_portable_with_legacy_absolute_dataset_paths(
     results_relative = Path("data/english/api_evals/results.jsonl")
     original_dataset = author_root / dataset_relative
     dataset_records = [{
-        "messages": [], "provider": "openai", "gen_model": "model",
+        "messages": [{"role": "user", "content": "Q1"}, {"role": "assistant", "content": "A1"}],
+        "provider": "openai", "gen_model": "model",
         "system_prompt_label": "v1_4", "use_system_prompt": True,
     }]
     result_records = [{
@@ -187,7 +221,8 @@ def test_master_csv_does_not_rebase_unverified_external_dataset_paths(
     project_name = "another-project" if candidate_kind == "unrelated" else "CP-Evals-Lab"
     relative = Path("data/english/api_evals/answers.jsonl")
     external = tmp_path / "external" / project_name / relative
-    _write_jsonl(external, [{"provider": "openai", "gen_model": "external-model"}])
+    _write_jsonl(external, [{"provider": "openai", "gen_model": "external-model",
+                             "messages": [{"role": "user", "content": "Q1"}, {"role": "assistant", "content": "A1"}]}])
     candidate = repo_root / relative
     candidate.parent.mkdir(parents=True)
     if candidate_kind == "unrelated":

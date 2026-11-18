@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 from huggingface_hub import InferenceClient
 from typing import Any, cast, Optional
 from contextlib import suppress
+from .generation_failures import require_complete_gemini_answer
 
 
 # --- Prompt module loader -------------------------------------------------
@@ -406,7 +407,7 @@ class ParrotAITogether(BaseParrotAI):
         model: Optional[str] = None,
         **kwargs,
     ) -> str:
-        model_to_use = model or self.model_name or "google/gemma-3-12b-it"
+        model_to_use = model or self.model_name or "Qwen/Qwen3.5-9B"
         messages = self._build_messages(prompt, system)
 
         completion = self._client.chat.completions.create(
@@ -449,7 +450,13 @@ class ParrotAIGemini(BaseParrotAI):
         if not os.environ.get("GEMINI_API_KEY"):
             raise ValueError("GEMINI_API_KEY must be set in environment variables")
 
-        self._client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        from .gemini_transport import gemini_http_options
+
+        # Bound stalled sockets and retry transient failures on the stable API.
+        self._client = genai.Client(
+            api_key=os.environ.get("GEMINI_API_KEY"),
+            http_options=gemini_http_options(),
+        )
         self._types = types
         print("Gemini client initialized")
 
@@ -460,7 +467,7 @@ class ParrotAIGemini(BaseParrotAI):
         model: Optional[str] = None,
         **kwargs,
     ) -> str:
-        model_to_use = model or self.model_name or "gemini-3-flash"
+        model_to_use = model or self.model_name or "gemini-3.8-flash"
 
         # Only apply system prompt if explicitly supplied
         if system is not None:
@@ -476,6 +483,8 @@ class ParrotAIGemini(BaseParrotAI):
             model=model_to_use, contents=prompt, config=config
         )
 
+        candidate = response.candidates[0] if response.candidates else None
+        require_complete_gemini_answer(candidate.finish_reason if candidate else None)
         return response.text or ""
 
     # --- Files API helpers ---
@@ -501,7 +510,7 @@ class ParrotAIGemini(BaseParrotAI):
         **kwargs,
     ) -> str:
         """Generate using raw contents list (e.g., [instruction, file])."""
-        model_to_use = model or self.model_name or "gemini-3-flash"
+        model_to_use = model or self.model_name or "gemini-3.8-flash"
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:
@@ -534,7 +543,7 @@ class ParrotAIGemini(BaseParrotAI):
         model: Optional[str] = None,
         seed: Optional[int] = 1689,
     ) -> dict:
-        model_to_use = model or self.model_name or "gemini-3-flash"
+        model_to_use = model or self.model_name or "gemini-3.8-flash"
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:
@@ -568,7 +577,7 @@ class ParrotAIGemini(BaseParrotAI):
         model: Optional[str] = None,
         seed: Optional[int] = 1689,
     ) -> dict:
-        model_to_use = model or self.model_name or "gemini-3-flash"
+        model_to_use = model or self.model_name or "gemini-3.8-flash"
         if system is not None:
             system_prompt = system or getattr(self.prompts, "MAIN_SYSTEM_PROMPT", "")
         else:

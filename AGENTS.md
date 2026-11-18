@@ -149,6 +149,8 @@ Prefixes: `ar_` (Arabic), `en_` (English)
 **CRITICAL**: Default `--limit` is 100. English has 500 questions, so all English evaluations require `--limit 0`.
 
 ### Resume Semantics
+- Long-running provider generation and evaluation must be restartable at question granularity. Persist and flush each completed answer or review before starting the next provider request; never retain an entire unfinished batch only in memory.
+- Restart must reuse validated saved work and request only unfinished questions. Progress must distinguish saved work from remaining requests. Verify both graceful interruption and forced process termination near the end of a batch (including 499 of 500 questions); interruption messages must state the actual persistence guarantees.
 - `--resume` counts existing lines and continues appending
 - **Never reorder, reformat, or compress JSONL content** after partial generation
 - Dataset shape must remain consistent

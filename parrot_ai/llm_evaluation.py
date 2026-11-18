@@ -13,7 +13,7 @@ backward compatibility.
 import os
 import json
 import importlib
-from typing import List, Tuple, Dict, Any, Optional, Iterable, cast
+from typing import List, Tuple, Dict, Any, Optional, Iterable, Callable, cast
 from openai import OpenAI
 from google import genai
 from google.genai import types
@@ -50,7 +50,9 @@ from .llm_evals import (
     has_arabic_theological_terminology,
 )
 from .llm_evals.progress_reporting import emit_progress
-from .llm_evals.score_validation import has_rubric_scores
+from .llm_evals.score_validation import has_rubric_scores, minimum_rubric_scores
+from .gemini_transport import gemini_http_options
+from .generation_failures import TerminalGenerationFailure
 
 load_dotenv()
 
@@ -90,6 +92,7 @@ class EvaluationEngine:
         model: str = DEFAULT_MODEL,
         language: str = "arabic",
         seed: Optional[int] = 7,
+        initialize_judge: bool = True,
     ) -> None:
         """Create a language-aware evaluation engine.
 
@@ -99,10 +102,17 @@ class EvaluationEngine:
         self.language = language
         self.seed = seed
         self.model = model
-        if model == DEFAULT_MODEL:
+        if not initialize_judge:
+            # Generation must not depend on any judge's credentials or SDK setup.
+            self.client = None
+        elif model == DEFAULT_MODEL:
             self.client = client or OpenAI()
         elif model.startswith("gemini"):
-            self.client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+            # Use the stable API consistently for judging and generation.
+            self.client = genai.Client(
+                api_key=os.environ.get("GEMINI_API_KEY"),
+                http_options=gemini_http_options(),
+            )
         elif model.startswith("claude"):
             self.client = anthropic.Anthropic()
         else:
@@ -126,60 +136,8 @@ class EvaluationEngine:
         """Evaluate a single (question, answer) pair returning rubric dict."""
         # Fast path for empty / whitespace-only answers: assign all 1s (lowest rubric) + penalty
         if not answer.strip():
-            temp: dict[str, dict[str, int | str]] = {
-                "Adherence": {
-                    k: 1
-                    for k in [
-                        "Core",
-                        "Secondary",
-                        "Tertiary_Handling",
-                        "Biblical_Basis",
-                        "Consistency",
-                        "Overall",
-                    ]
-                },
-                "Kindness_and_Gentleness": {
-                    k: 1
-                    for k in [
-                        "Core_Clarity_with_Kindness",
-                        "Pastoral_Sensitivity",
-                        "Secondary_Fairness",
-                        "Tertiary_Neutrality",
-                        "Tone",
-                        "Overall",
-                    ]
-                },
-                "Interfaith_Sensitivity": {
-                    k: 1
-                    for k in [
-                        "Respect_and_Handling_Objections",
-                        "Objection_Acknowledgement",
-                        "Evangelism",
-                        "Gospel_Boldness",
-                        "Overall",
-                    ]
-                },
-            }
-            if self.language == "arabic":
-                temp["Arabic_Accuracy"] = {
-                    **{
-                        k: 1
-                        for k in [
-                            "Grammar_and_Syntax",
-                            "Theological_Nuance",
-                            "Contextual_Clarity",
-                            "Consistency_of_Terms",
-                            "Arabic_Purity",
-                            "Overall",
-                        ]
-                    },
-                    "Penalty_Reason": "Empty answer",
-                }
-            return temp
-        if self.language == "arabic":
-            user_content = f"السؤال:\n{question}\n\nالإجابة:\n{answer}\n\nقيّم وفق التعليمات السابقة."
-        else:
-            user_content = f"Question:\n{question}\n\nAnswer:\n{answer}\n\nEvaluate per the rubric instructions above."
+            return minimum_rubric_scores(self.language)
+        user_content = self.evaluation_content(question, answer)
         # Choose response model based on language
         response_model = (
             EvaluationResultArabic
@@ -204,6 +162,10 @@ class EvaluationEngine:
                 contents=contents,
                 config=cfg,
             )
+            candidates = getattr(resp, "candidates", None) or []
+            reason = candidates[0].finish_reason if candidates else None
+            if reason != "STOP":
+                raise ValueError(f"Gemini judge output did not finish successfully: {reason}")
             # Prefer structured parsed output; fallback to parsing JSON text
             result_dict: dict
             parsed_obj = getattr(resp, "parsed", None)
@@ -268,6 +230,15 @@ class EvaluationEngine:
                     "Failed to parse evaluation result from OpenAI response"
                 )
             result_dict = json.loads(parsed.model_dump_json())
+        return self.process_evaluation(question, answer, result_dict)
+
+    def evaluation_content(self, question: str, answer: str) -> str:
+        if self.language == "arabic":
+            return f"السؤال:\n{question}\n\nالإجابة:\n{answer}\n\nقيّم وفق التعليمات السابقة."
+        return f"Question:\n{question}\n\nAnswer:\n{answer}\n\nEvaluate per the rubric instructions above."
+
+    def process_evaluation(self, question: str, answer: str, result_dict: dict) -> dict:
+        """Apply the same score validation and ordered heuristics to either transport."""
         # Check before heuristics can create empty sections or coerce non-scores.
         if not has_rubric_scores(result_dict):
             raise ValueError("Judge returned no evaluation scores")
@@ -292,6 +263,9 @@ class EvaluationEngine:
         limit: Optional[int] = None,
         progress: bool = True,
         stop_on_error: bool = False,
+        on_result: Optional[Callable[[dict], None]] = None,
+        progress_initial: int = 0,
+        progress_total: Optional[int] = None,
     ) -> list[dict]:
         """Evaluate multiple QA pairs.
 
@@ -300,12 +274,15 @@ class EvaluationEngine:
             limit: Optional limit on the number of pairs to evaluate.
             progress: Whether to show a progress bar.
             stop_on_error: Whether to stop evaluation on the first error.
+            on_result: Checkpoint each attempted result before starting another request.
+            progress_initial: Valid saved scores already completed for this run.
+            progress_total: Full run size, including saved scores.
 
         Otherwise, retain attempted results and stop on a permanent error or
         three consecutive failures so callers can save and resume partial work.
         """
         out: list[dict] = []
-        processed = 0
+        completed = progress_initial
         # Determine total length for progress bar
         total: Optional[int] = None
         try:
@@ -317,17 +294,21 @@ class EvaluationEngine:
                 total = limit
             else:
                 total = min(total, limit)
+        total = progress_total if progress_total is not None else (
+            total + progress_initial if total is not None else None
+        )
         bar = None
         if progress:
             try:
-                bar = tqdm(total=total, desc="Evaluating", unit="qa")
+                bar = tqdm(total=total, initial=progress_initial, desc="Evaluating", unit="qa")
             except Exception:  # noqa: BLE001
                 bar = None
-        emit_progress("judging", 0, total)
+        emit_progress("judging", progress_initial, total)
         consecutive_errors = 0
         for i, (q, a) in enumerate(pairs):
-            if limit is not None and processed >= limit:
+            if limit is not None and i >= limit:
                 break
+            should_stop = False
             try:
                 res = self.evaluate(q, a)
                 if not has_rubric_scores(res):
@@ -344,11 +325,18 @@ class EvaluationEngine:
                 tqdm.write(f"[error] Evaluation {i + 1}: {e}")
                 if _stop_after_error(e, consecutive_errors):
                     tqdm.write("[failed] Stopping judge batch; returning attempted results for resume.")
-                    break
-            processed += 1
-            if bar:
-                bar.update(1)
-            emit_progress("judging", processed, total)
+                    should_stop = True
+            # Keep persistence outside the provider error handler: a disk failure
+            # must stop immediately, not trigger more paid requests.
+            if on_result is not None:
+                on_result(out[-1])
+            if "error" not in out[-1]:
+                completed += 1
+                if bar:
+                    bar.update(1)
+            emit_progress("judging", completed, total)
+            if should_stop:
+                break
         if bar:
             bar.close()
         return out
@@ -394,6 +382,9 @@ class EvaluationEngine:
         model: Optional[str] = None,
         progress: bool = True,
         system: Optional[str] = None,
+        on_result: Optional[Callable[[dict], None]] = None,
+        progress_initial: int = 0,
+        progress_total: Optional[int] = None,
         **kwargs,
     ) -> GenerationBatch:
         """Generate responses using any supported provider.
@@ -422,9 +413,9 @@ class EvaluationEngine:
         # Default models per provider
         default_models = {
             "openai": "gpt-5-mini",
-            "together": "google/gemma-3-27b-it",
+            "together": "Qwen/Qwen3.5-9B",
             "hf": "google/gemma-3-27b-it",
-            "google": "gemini-3-flash",
+            "google": "gemini-3.8-flash",
             "xai": "grok-3-mini",
             "anthropic": "claude-haiku-4-5-20251001",
         }
@@ -449,20 +440,24 @@ class EvaluationEngine:
             wrapper.set_model(model)
 
         out = GenerationBatch()
+        total = progress_total if progress_total is not None else len(questions) + progress_initial
         bar = None
         if progress:
             try:
                 bar = tqdm(
-                    total=len(questions),
+                    total=total,
+                    initial=progress_initial,
                     desc=f"Generating ({provider.title()})",
                     unit="q",
                 )
             except Exception:
                 bar = None
 
-        emit_progress("generating", 0, len(questions))
+        emit_progress("generating", progress_initial, total)
+        completed = progress_initial
         consecutive_errors = 0
         for i, q in enumerate(questions):
+            should_stop = False
             try:
                 answer = wrapper.generate(prompt=q, model=use_model, system=system)
                 if not isinstance(answer, str) or not answer.strip():
@@ -478,6 +473,14 @@ class EvaluationEngine:
                     }
                 )
                 consecutive_errors = 0
+            except TerminalGenerationFailure as e:
+                out.append({
+                    "index": i, "question": q, "answer": "", "model": use_model,
+                    "provider": provider, "system_used": bool(system),
+                    "generation_failure": e.metadata(),
+                })
+                consecutive_errors = 0
+                tqdm.write(f"[model failure] Generation {i + 1}: {e.reason}; recorded for minimum scoring, no retry")
             except Exception as e:
                 out.append(
                     {
@@ -494,11 +497,17 @@ class EvaluationEngine:
                 if _stop_after_error(e, consecutive_errors):
                     out.aborted = True
                     tqdm.write("[failed] Stopping generation batch; returning attempted answers for resume.")
-                    break
+                    should_stop = True
 
-            if bar:
-                bar.update(1)
-            emit_progress("generating", i + 1, len(questions))
+            if on_result is not None:
+                on_result(out[-1])
+            if "error" not in out[-1]:
+                completed += 1
+                if bar:
+                    bar.update(1)
+            emit_progress("generating", completed, total)
+            if should_stop:
+                break
 
         if bar:
             bar.close()

@@ -3,8 +3,14 @@
   "eval_version": "v2",
   "system_prompt_label": "v1_4",
   "use_system_prompt": true,
-  "default_judge_model": "gpt-5-mini",
+  "default_judge_models": [
+    "gpt-6-luna",
+    "gemini-4-hydrogen",
+    "claude-haiku-5-5"
+  ],
   "max_parallel_operations": 4,
+  "gemini_execution": "batch",
+  "gemini_batch_sync_fallback_max": 9,
   "limit": 0,
   "timezone": "America/Chicago",
   "question_tags": "data/english/en_question_tags.json",
@@ -14,18 +20,16 @@
   "models": [
     {
       "provider": "google",
-      "model": "gemini-3.8-flash",
+      "model": "gemini-3.5-flash-lite",
       "judge_contender": true
     },
     {
-      "provider": "openai",
-      "model": "gpt-6-luna",
-      "judge_contender": true
+      "provider": "xai",
+      "model": "grok-4.6"
     },
     {
-      "provider": "anthropic",
-      "model": "claude-haiku-5-5",
-      "judge_contender": true
+      "provider": "xai",
+      "model": "grok-4.7"
     }
   ],
   "provider_leaders": [
@@ -64,6 +68,12 @@
       "model": "gemini-3.8-flash",
       "answers_label": "google-gemini-3.8-flash-v1_4",
       "dataset": "data/english/api_evals/generated_api_google_google-gemini-3.8-flash-v1_4.jsonl"
+    },
+    {
+      "provider": "google",
+      "model": "gemini-4-hydrogen",
+      "answers_label": "google-gemini-4-hydrogen-v1_4",
+      "dataset": "data/english/api_evals/generated_api_google_google-gemini-4-hydrogen-v1_4.jsonl"
     },
     {
       "provider": "anthropic",
