@@ -54,7 +54,7 @@ from parrot_ai.llm_evals import (
 )
 from parrot_ai.llm_evals.master_csv import infer_dataset_metadata
 from parrot_ai.llm_evals.data_loading import load_saved_answers
-from parrot_ai.llm_evals.extended_sample import default_extended_results, extended_sample_path, select_extended_questions
+from parrot_ai.llm_evals.extended_sample import resolve_results_path, select_extended_questions
 from parrot_ai.llm_evals.score_validation import is_scored_record, minimum_rubric_scores, review_matches_outcome
 from parrot_ai.generation_failures import is_terminal_generation_failure, load_generation_failures
 from parrot_ai.jsonl_checkpoints import recover_jsonl_tail
@@ -133,8 +133,9 @@ def _generate_responses(engine, questions, *, artifact, gemini_execution="sync",
             sync_fallback_max=batch_sync_fallback_max, **kwargs,
         )
     if kwargs.get("provider") == "google":
-        from parrot_ai.gemini_batch import ensure_no_pending_batch
-        ensure_no_pending_batch(Path(artifact))
+        from parrot_ai.llm_evals.gemini_batch_adapter import guard_gemini_sync
+        guard_gemini_sync(engine, ((q, "") for q in questions), model=kwargs["model"], artifact=artifact,
+                          stage="generating", system=kwargs.get("system"))
     return engine.generate_responses(questions, **kwargs)
 
 
@@ -614,12 +615,8 @@ def _main(argv: List[str]) -> int:
 
     results_name = Path(args.results_jsonl or f"eval_results_{sanitize_filename(answers_label)}__judged_by_{sanitize_filename(args.judge_model)}.jsonl")
     results_jsonl = results_name if results_name.is_absolute() else default_comp_csv.parent / results_name.name
-    if not args.results_jsonl and args.mode == "extended":
-        results_jsonl = default_extended_results(results_jsonl)
-    if not args.generate_only and args.mode != "extended" and extended_sample_path(results_jsonl).exists():
-        if args.results_jsonl:
-            raise ValueError(f"{results_jsonl} belongs to a saved extended sample. Choose a separate --results-jsonl.")
-        results_jsonl = results_jsonl.with_stem(results_jsonl.stem + "__" + args.mode)
+    if not args.generate_only:
+        results_jsonl = resolve_results_path(results_jsonl, args.mode, explicit=bool(args.results_jsonl))
 
     if args.mode == "extended":
         # Extended mode: random sample of questions directly from dataset
@@ -822,8 +819,8 @@ def _main(argv: List[str]) -> int:
             )
         else:
             if args.judge_model.startswith("gemini"):
-                from parrot_ai.gemini_batch import ensure_no_pending_batch
-                ensure_no_pending_batch(results_jsonl)
+                from parrot_ai.llm_evals.gemini_batch_adapter import guard_gemini_sync
+                guard_gemini_sync(engine, pairs_to_eval, model=args.judge_model, artifact=results_jsonl, stage="judging")
             engine = EvaluationEngine(model=args.judge_model, language=args.language, initialize_judge=True)
             new_results = engine.batch_evaluate(
                 pairs_to_eval, limit=None, progress=not args.no_progress,

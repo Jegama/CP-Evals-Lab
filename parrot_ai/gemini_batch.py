@@ -8,7 +8,7 @@ import json
 import os
 from pathlib import Path
 import time
-from typing import Callable
+from typing import Callable, Iterable
 import uuid
 
 from google import genai
@@ -28,8 +28,34 @@ class GeminiBatchPending(RuntimeError):
     """The remote job is durable and running; the scheduler can release its worker."""
 
 
-def ensure_no_pending_batch(artifact: Path) -> None:
-    reconcile_checkpointed_batches(artifact, require_finished=True)
+def ensure_no_pending_batch(artifact: Path, *, pending_keys: Iterable[str] | None = None, review_schema=None) -> None:
+    """Prevent a synchronous request from duplicating recoverable Gemini work."""
+    directory = state_directory(artifact)
+    if not directory.exists():
+        return
+    with _lock(directory):
+        _reconcile_manifests(artifact, directory, require_finished=True)
+        fallbacks = list(directory.glob("*.sync.json"))
+        if not fallbacks:
+            return
+        # CLI callers already filtered out durable answers and valid reviews.
+        wanted = set(pending_keys) if pending_keys is not None else None
+        saved = _saved_request_keys(artifact) if wanted is None else set()
+        for path in fallbacks:
+            cached = json.loads(path.read_text(encoding="utf-8"))
+            key, row = cached["key"], cached["row"]
+            if row.get("error") or key in saved or (wanted is not None and key not in wanted):
+                continue
+            try:
+                parse_batch_response(row.get("response") or {}, review_schema)
+            except TerminalGenerationFailure:
+                if review_schema is not None:
+                    continue  # A terminal answer is durable, a failed judge is retryable.
+            except (ValueError, KeyError, TypeError):
+                continue
+            raise RuntimeError(
+                f"A Gemini fallback reply at {path} still needs a checkpoint. Please resume with --gemini-execution batch."
+            )
 
 
 def _saved_request_keys(artifact: Path, *, attempted_job: str | None = None) -> set[str]:
@@ -78,32 +104,39 @@ def _unconsumed_keys(path: Path, manifest: dict, artifact: Path) -> set[str]:
 
 def reconcile_checkpointed_batches(artifact: Path, *, require_finished: bool = False) -> None:
     """Finish a downloaded job if every key already has a successful checkpoint."""
+    if require_finished:
+        ensure_no_pending_batch(artifact)
+        return
     directory = state_directory(artifact)
     if not directory.exists():
         return
     with _lock(directory):
-        saved_keys = None
-        for path in directory.glob("*.job.json"):
-            manifest = json.loads(path.read_text())
-            phase = manifest["phase"]
-            if phase in ("rejected", "abandoned") or (phase == "imported" and manifest.get("unconsumed_keys") == []):
+        _reconcile_manifests(artifact, directory, require_finished=False)
+
+
+def _reconcile_manifests(artifact: Path, directory: Path, *, require_finished: bool) -> None:
+    saved_keys = None
+    for path in directory.glob("*.job.json"):
+        manifest = json.loads(path.read_text())
+        phase = manifest["phase"]
+        if phase in ("rejected", "abandoned") or (phase == "imported" and manifest.get("unconsumed_keys") == []):
+            continue
+        if phase in ("imported", "partially_imported") or (
+            phase == "submitted" and manifest.get("remote_state") in TERMINAL_STATES
+            and path.with_suffix(".responses.jsonl").is_file()
+        ):
+            remaining = _unconsumed_keys(path, manifest, artifact)
+            if remaining:
+                if saved_keys is None:
+                    saved_keys = _saved_request_keys(artifact)
+                remaining.difference_update(saved_keys)
+            if not remaining or phase == "imported":
+                manifest.update(phase="partially_imported" if remaining else "imported", unconsumed_keys=sorted(remaining))
+                _save(path, manifest)
+            if not remaining:
                 continue
-            if phase in ("imported", "partially_imported") or (
-                phase == "submitted" and manifest.get("remote_state") in TERMINAL_STATES
-                and path.with_suffix(".responses.jsonl").is_file()
-            ):
-                remaining = _unconsumed_keys(path, manifest, artifact)
-                if remaining:
-                    if saved_keys is None:
-                        saved_keys = _saved_request_keys(artifact)
-                    remaining.difference_update(saved_keys)
-                if not remaining or phase == "imported":
-                    manifest.update(phase="partially_imported" if remaining else "imported", unconsumed_keys=sorted(remaining))
-                    _save(path, manifest)
-                if not remaining:
-                    continue
-            if require_finished:
-                raise RuntimeError(f"An unfinished Gemini batch exists at {path}; resume with --gemini-execution batch")
+        if require_finished:
+            raise RuntimeError(f"An unfinished Gemini batch exists at {path}; resume with --gemini-execution batch")
 
 
 def request_key(model: str, request: dict) -> str:
@@ -177,6 +210,13 @@ def response_text(response: dict) -> str:
     if not text.strip():
         raise ValueError("Gemini returned an empty answer")
     return text
+
+
+def parse_batch_response(response: dict, review_schema=None):
+    text = response_text(response)
+    if review_schema is None:
+        return text
+    return review_schema.model_validate(json.loads(text)).model_dump()
 
 
 def run_batch(

@@ -18,6 +18,7 @@ import cp_eval_llms as cli
 from parrot_ai import gemini_batch as batch
 from parrot_ai.evaluation_schemas import EvaluationResultEnglish
 from parrot_ai.llm_evaluation import EvaluationEngine
+from parrot_ai.llm_evals.extended_sample import default_extended_results
 from parrot_ai.llm_evals.gemini_batch_adapter import generate_gemini_batch, judge_gemini_batch
 from parrot_ai.llm_evals.master_csv import ResultSource, build_master_row
 
@@ -126,6 +127,47 @@ def test_smaller_limit_cannot_unlock_sync_for_cached_keys(tmp_path, monkeypatch,
     assert client.batches.create.call_count == client.files.download.call_count == 1
 
 
+@pytest.mark.parametrize("old_results", [None, "", '{"question":"no recorded mode"}\n'])
+def test_ambiguous_legacy_job_requires_explicit_path_before_first_review(tmp_path, monkeypatch, old_results):
+    monkeypatch.chdir(tmp_path)
+    dataset, questions = tmp_path / "answers.jsonl", tmp_path / "questions.txt"
+    questions.write_text("q\n")
+    dataset.write_text(json.dumps({"messages": [{"role": "user", "content": "q"},
+                                                {"role": "assistant", "content": "answer"}]}) + "\n")
+    client = FakeClient()
+    rubric = {section: {name: 4 for name, field in model.annotation.model_fields.items() if field.is_required()}
+              for section, model in EvaluationResultEnglish.model_fields.items()}
+    client.rows = lambda req: {"response": response(json.dumps(rubric))}
+    monkeypatch.setattr(batch, "_new_client", lambda: client)
+    client.batches.get.side_effect = lambda **kwargs: types.BatchJob(name="batches/0", state="JOB_STATE_PENDING")
+    args = ["--language", "english", "--dataset", str(dataset), "--questions-file", str(questions), "--limit", "0",
+            "--answers-label", "test", "--judge-model", "gemini-test", "--gemini-execution", "batch",
+            "--gemini-batch-no-wait", "--skip-comparison-csv", "--no-progress"]
+    assert cli.main(["--mode", "dataset", *args]) == 75
+    results = tmp_path / "data/english/training_datasets/evals/eval_results_test__judged_by_gemini-test.jsonl"
+    separate = results.with_stem(results.stem + "__extended")
+    assert default_extended_results(results) == separate
+    path, = batch.state_directory(results).glob("*.job.json")
+    manifest = json.loads(path.read_text())
+    path.write_text(json.dumps({**manifest, "version": 1}))
+    if old_results is not None:
+        results.write_text(old_results)
+    for mode in ("extended", "dataset"):
+        with pytest.raises(ValueError, match="--results-jsonl"):
+            cli.main(["--mode", mode, *args])
+    assert not list(results.parent.glob("*.sample.json"))
+    assert (results.read_text() if results.exists() else None) == old_results
+    assert client.batches.create.call_count == client.batches.get.call_count == 1
+    client.batches.get.side_effect = client.get
+    assert cli.main(["--mode", "dataset", "--results-jsonl", str(results), *args]) == 0
+    assert cli.main(["--mode", "dataset", *args]) == 0
+    assert client.batches.create.call_count == 1
+    assert json.loads(results.read_text().splitlines()[-1])["mode"] == "dataset"
+    assert cli.main(["--mode", "extended", *args]) == 0
+    assert json.loads(separate.read_text())["mode"] == "extended"
+    assert client.batches.create.call_count == 2
+
+
 def test_null_content_retries_only_empty_batch_item(tmp_path, monkeypatch):
     client = FakeClient()
     client.rows = lambda req: {"response": ({"candidates": [{"finishReason": "STOP", "content": None}]}
@@ -165,6 +207,9 @@ def test_extended_polls_keep_original_sample_and_export(tmp_path, monkeypatch, l
     assert cli.main(args) == 75
     if legacy_pending_job:
         sample_path.unlink()
+        manifest_path, = batch.state_directory(reviews).glob("*.job.json")
+        manifest = json.loads(manifest_path.read_text())
+        manifest_path.write_text(json.dumps({**manifest, "version": 1}))
     # A new draw would now drop the first question and add the 501st.
     monkeypatch.setattr(random, "sample", lambda population, k: list(population)[-k:])
     client.batches.get.side_effect = client.get
@@ -275,6 +320,86 @@ def test_small_failure_set_uses_sync_and_replays_cached_reply_after_disk_failure
     assert saved == set(wanted)
     assert client.models.generate_content.call_count == 1
     assert client.batches.create.call_count == 1
+
+
+@pytest.mark.parametrize("mode,outcome,reusable", [
+    ("generate-api_evals", "answer", True), ("generate-api_evals", "RECITATION", True),
+    ("dataset", "rubric", True), ("dataset", "RECITATION", False),
+    ("dataset", "{}", False), ("generate-api_evals", "MAX_TOKENS", False),
+    ("generate-api_evals", "api_error", False),
+])
+def test_sync_switch_after_fallback_checkpoint_failure(tmp_path, monkeypatch, mode, outcome, reusable):
+    monkeypatch.chdir(tmp_path)
+    dataset, reviews, questions = (tmp_path / name for name in ("answers.jsonl", "reviews.jsonl", "questions.txt"))
+    questions.write_text("q\n")
+    args = ["--mode", mode, "--language", "english", "--questions-file", str(questions), "--limit", "0",
+            "--judge-model", "gemini-test", "--no-progress", "--skip-comparison-csv"]
+    if mode == "dataset":
+        dataset.write_text(json.dumps({"messages": [{"role": "user", "content": "q"},
+                                                    {"role": "assistant", "content": "answer"}]}) + "\n")
+        args += ["--dataset", str(dataset), "--answers-label", "test", "--results-jsonl", str(reviews)]
+        artifact = reviews
+    else:
+        args += ["--provider", "google", "--gen-model", "gemini-test", "--output-dataset", str(dataset), "--generate-only"]
+        artifact = dataset
+    client = FakeClient()
+    client.rows = lambda req: {"error": {"message": "batch item failed"}}
+    if outcome == "rubric":
+        rubric = {section: {name: 4 for name, field in model.annotation.model_fields.items() if field.is_required()}
+                  for section, model in EvaluationResultEnglish.model_fields.items()}
+        raw = response(json.dumps(rubric))
+    else:
+        raw = response(outcome)
+        if outcome in ("MAX_TOKENS", "RECITATION"):
+            raw["candidates"][0]["finishReason"] = outcome
+    client.models.generate_content.side_effect = (ConnectionError("offline") if outcome == "api_error" else
+                                                 lambda **kwargs: types.GenerateContentResponse.model_validate(raw))
+    monkeypatch.setattr(batch, "_new_client", lambda: client)
+    engine = EvaluationEngine(language="english", model="gemini-test", initialize_judge=False)
+    monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
+    sync = Mock(side_effect=AssertionError("reached synchronous provider"))
+    monkeypatch.setattr(engine, "batch_evaluate" if mode == "dataset" else "generate_responses", sync)
+    batch_args = [*args, "--gemini-execution", "batch", "--gemini-batch-sync-fallback-max", "1"]
+    # Stop after the raw fallback is durable, before its application checkpoint.
+    original_append = cli._append_jsonl_record
+    def interrupted(path, record):
+        if record.get("execution_mode") == "sync_fallback":
+            raise OSError("disk full")
+        original_append(path, record)
+    with monkeypatch.context() as patch:
+        patch.setattr(cli, "_append_jsonl_record", interrupted)
+        if not reusable and mode != "dataset":
+            assert cli.main(batch_args) == 1  # Generation errors have no answer checkpoint.
+        else:
+            with pytest.raises(OSError, match="disk full"):
+                cli.main(batch_args)
+    assert len(list(batch.state_directory(artifact).glob("*.sync.json"))) == 1
+    if not reusable:
+        with pytest.raises(AssertionError, match="reached synchronous provider"):
+            cli.main(args)
+        return
+    with pytest.raises(RuntimeError, match="--gemini-execution batch"):
+        cli.main(args)
+    sync.assert_not_called()
+    # An unrelated question or a replacement answer has a different request key.
+    with monkeypatch.context() as patch:
+        if mode == "dataset":
+            patch.setattr(cli, "load_saved_answers", lambda path: {"q": "replacement"})
+        else:
+            patch.setattr(cli, "load_eval_questions", lambda *args, **kwargs: ["another question"])
+        with pytest.raises(AssertionError, match="reached synchronous provider"):
+            cli.main(args)
+    assert cli.main(batch_args) == 0
+    saved = json.loads(artifact.read_text().splitlines()[-1])
+    assert saved["execution_mode"] == "sync_fallback"
+    if outcome == "RECITATION":
+        assert saved["generation_failure"] == {"reason": "RECITATION", "terminal": True}
+    elif mode == "dataset":
+        assert saved["evaluation"]["Adherence"]
+    else:
+        assert saved["messages"][-1]["content"] == "answer"
+    assert cli.main(args) == 0
+    assert client.batches.create.call_count == client.models.generate_content.call_count == 1
 
 
 @pytest.mark.parametrize("count,maximum,expected", [(9, 9, 9), (10, 9, 0), (1, 0, 0)])

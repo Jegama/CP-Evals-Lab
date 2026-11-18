@@ -16,32 +16,58 @@ def extended_sample_path(results: Path) -> Path:
     return results.with_name(results.name + ".sample.json")
 
 
-def default_extended_results(standard: Path) -> Path:
-    """Separate new samples from canonical runs while resuming older artifacts."""
-    from ..gemini_batch import state_directory
-
-    extended = standard.with_stem(standard.stem + "__extended")
-    if extended.exists() or extended_sample_path(extended).exists():
-        return extended
-    if extended_sample_path(standard).exists():
-        return standard
-    if standard.exists():
-        # The shared legacy name may belong to a running canonical evaluation.
-        # Inspect complete rows without repairing or modifying its checkpoint.
-        with standard.open("rb") as stream:
+def _recorded_scope(results: Path) -> str | None:
+    if extended_sample_path(results).exists():
+        return "extended"
+    scope = None
+    if results.is_file():
+        # Inspect complete rows without repairing another run's checkpoint.
+        with results.open("rb") as stream:
             for line in stream:
                 try:
                     row = json.loads(line)
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
-                if isinstance(row, dict) and row.get("mode") == "extended":
-                    return standard
-    else:
-        # Older no-wait runs used the shared filename before their first review.
-        for path in state_directory(standard).glob("*.job.json"):
+                if isinstance(row, dict):
+                    if row.get("mode") == "extended":
+                        return "extended"
+                    if row.get("mode") in ("dataset", "generate-api_evals", "generate-ft_evals"):
+                        scope = "canonical"
+    return scope
+
+
+def resolve_results_path(results: Path, mode: str, *, explicit: bool) -> Path:
+    """Choose a checkpoint without claiming another mode's historical work."""
+    from ..gemini_batch import state_directory
+
+    separate = results.with_stem(results.stem + "__" + mode)
+    if mode == "extended" and not explicit and (separate.exists() or extended_sample_path(separate).exists()):
+        return separate
+    scope = _recorded_scope(results)
+    if scope == "extended":
+        if mode == "extended":
+            return results
+        if explicit:
+            raise ValueError(f"{results} belongs to an extended sample. Choose a separate --results-jsonl.")
+        return separate
+    if explicit:
+        if mode == "extended" and scope == "canonical":
+            raise ValueError(f"{results} contains canonical reviews. Choose a separate --results-jsonl.")
+        return results
+    if scope is None and mode in ("extended", "dataset"):
+        # Version 1 used the same default for both modes, even before the first review.
+        for path in state_directory(results).glob("*.job.json"):
             if json.loads(path.read_text(encoding="utf-8")).get("version", 1) == 1:
-                return standard
-    return extended
+                raise ValueError(
+                    f"The legacy Gemini batch at {path} could belong to dataset or extended mode. "
+                    f"Pass --results-jsonl {results} to resume its original mode, "
+                    f"or choose a separate --results-jsonl for this run."
+                )
+    return separate if mode == "extended" else results
+
+
+def default_extended_results(standard: Path) -> Path:
+    return resolve_results_path(standard, "extended", explicit=False)
 
 
 def load_extended_sample(results: Path) -> list[str] | None:

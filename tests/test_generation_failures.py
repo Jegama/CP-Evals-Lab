@@ -279,8 +279,11 @@ def test_local_and_reused_reviews_need_no_judge_client(tmp_path, monkeypatch, ju
     forbidden.assert_not_called()
 
 
-def test_extended_resume_keeps_legacy_reviews_and_separates_canonical_results(tmp_path, monkeypatch):
+@pytest.mark.parametrize("canonical_first", [False, True])
+def test_extended_resume_keeps_legacy_reviews_and_separates_canonical_results(tmp_path, monkeypatch, canonical_first):
     monkeypatch.chdir(tmp_path)
+    # The canonical list overlaps the sample at q502 and includes q0 outside it.
+    monkeypatch.setattr("parrot_ai.llm_evals.extended_sample.random.sample", lambda population, k: population[-k:])
     directory = tmp_path / "data/english/training_datasets/evals"
     directory.mkdir(parents=True)
     original = directory / "eval_results_answers__judged_by_gpt-5-mini.jsonl"
@@ -296,16 +299,27 @@ def test_extended_resume_keeps_legacy_reviews_and_separates_canonical_results(tm
     monkeypatch.setattr(cli, "EvaluationEngine", lambda **kwargs: engine)
     args = ["--dataset", str(dataset), "--language", "english", "--limit", "0", "--answers-label", "answers",
             "--skip-comparison-csv", "--no-progress"]
+    canonical = tmp_path / "questions.txt"
+    canonical.write_text(questions[0] + "\n" + questions[-1] + "\n")
+    canonical_args = ["--mode", "dataset", "--questions-file", str(canonical), *args]
+    if canonical_first:
+        assert cli.main(canonical_args) == 0
+        assert original.read_bytes() == before
+        assert engine.evaluate.call_count == 2
+        with pytest.raises(ValueError, match="extended"):
+            cli.main([*canonical_args, "--results-jsonl", str(original)])
+    engine.evaluate.reset_mock()
     assert cli.main(["--mode", "extended", *args]) == 0
     assert original.read_bytes().startswith(before) and len(original.read_bytes().splitlines()) == 500
     assert engine.evaluate.call_count == 499
     saved = original.read_bytes()
     assert cli.main(["--mode", "extended", *args]) == 0 and original.read_bytes() == saved
-    canonical = tmp_path / "questions.txt"
-    canonical.write_text(questions[-1] + "\n")
-    assert cli.main(["--mode", "dataset", "--questions-file", str(canonical), *args]) == 0
+    assert cli.main(canonical_args) == 0
     assert original.read_bytes() == saved
-    assert len(original.with_stem(original.stem + "__dataset").read_bytes().splitlines()) == 1
+    separate = original.with_stem(original.stem + "__dataset")
+    assert build_master_row(ResultSource(separate), repo_root=tmp_path)["question_count"] == 2
+    assert build_master_row(ResultSource(original), repo_root=tmp_path)["question_count"] == 500
+    assert engine.evaluate.call_count == (499 if canonical_first else 501)
 
 
 def test_fresh_extended_run_preserves_other_results_before_sample_publication(tmp_path, monkeypatch):

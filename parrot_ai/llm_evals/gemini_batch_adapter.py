@@ -1,10 +1,9 @@
 """Bridge remote Gemini batches to the normal per-question checkpoints."""
 
-import json
 from pathlib import Path
 
 from ..evaluation_schemas import EvaluationResultArabic, EvaluationResultEnglish
-from ..gemini_batch import request_key, response_text, run_batch
+from ..gemini_batch import ensure_no_pending_batch, parse_batch_response, request_key, run_batch
 from ..generation_failures import TerminalGenerationFailure
 from ..llm_evaluation import GenerationBatch
 from .progress_reporting import emit_progress
@@ -17,29 +16,46 @@ def _request(contents: str, system: str | None) -> dict:
     return request
 
 
-def _run(
-    engine, items, *, model, artifact, stage, on_result=None,
-    system=None, progress_initial=0, progress_total=None, poll_seconds=30,
-    retry_unconfirmed=False, wait=True, sync_fallback_max=0,
-):
-    schema = EvaluationResultArabic if engine.language == "arabic" else EvaluationResultEnglish
-    requests = {}
-    identities = {}
+def _review_schema(engine, stage):
+    if stage == "judging":
+        return EvaluationResultArabic if engine.language == "arabic" else EvaluationResultEnglish
+    return None
+
+
+def _item_requests(engine, items, model, system, schema):
+    json_schema = schema.model_json_schema() if schema else None
     for index, (question, answer) in enumerate(items):
-        if stage == "judging":
+        if schema:
             if not answer.strip():
                 raise ValueError("Cannot batch-judge an empty answer")
             content = f"{engine.instructions}\n\n{engine.evaluation_content(question, answer)}"
             request = _request(content, engine.system_prompt)
             request["generationConfig"] = {
                 "seed": engine.seed, "responseMimeType": "application/json",
-                "responseJsonSchema": schema.model_json_schema(),
+                "responseJsonSchema": json_schema,
             }
         else:
             request = _request(question, system)
-        key = request_key(model, request)
+        yield request_key(model, request), request, (index, question, answer)
+
+
+def guard_gemini_sync(engine, items, *, model, artifact, stage, system=None):
+    schema = _review_schema(engine, stage)
+    pending_keys = (key for key, _, _ in _item_requests(engine, items, model, system, schema))
+    ensure_no_pending_batch(Path(artifact), pending_keys=pending_keys, review_schema=schema)
+
+
+def _run(
+    engine, items, *, model, artifact, stage, on_result=None,
+    system=None, progress_initial=0, progress_total=None, poll_seconds=30,
+    retry_unconfirmed=False, wait=True, sync_fallback_max=0,
+):
+    schema = _review_schema(engine, stage)
+    requests = {}
+    identities = {}
+    for key, request, identity in _item_requests(engine, items, model, system, schema):
         requests[key] = request
-        identities[key] = (index, question, answer)
+        identities[key] = identity
     results = {}
     total = progress_total if progress_total is not None else progress_initial + len(items)
 
@@ -56,12 +72,11 @@ def _run(
         try:
             if row.get("error"):
                 raise ValueError(f"Gemini {execution_label} request failed: {row['error']}")
-            text = response_text(response)
+            parsed = parse_batch_response(response, schema)
             if stage == "judging":
-                parsed = schema.model_validate(json.loads(text)).model_dump()
                 record.update(answer=answer, evaluation=engine.process_evaluation(question, answer, parsed))
             else:
-                record.update(answer=text, provider="google")
+                record.update(answer=parsed, provider="google")
         except (ValueError, TypeError, KeyError) as exc:
             if stage == "generating" and isinstance(exc, TerminalGenerationFailure):
                 record.update(answer="", provider="google", generation_failure=exc.metadata())
